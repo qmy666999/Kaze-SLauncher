@@ -9,6 +9,7 @@ import com.kaze.newage.core.net.SakuraUser
 import com.kaze.newage.core.server.ServerProperties
 import com.kaze.newage.data.prefs.SettingsPrefs
 import com.kaze.newage.data.model.ServerInstance
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,9 +41,23 @@ class NetworkController(
         val selectedId: Long? = null,
         val error: String? = null,
         val message: String = "",
+        /** 正在用本地保存的访问密钥自动恢复登录 */
+        val restoring: Boolean = false,
     )
 
-    private val _sakura = MutableStateFlow(SakuraState(token = prefs.sakuraToken.value))
+    private val _sakura = MutableStateFlow(
+        // 密钥持久化在 SharedPreferences（加密）里：这里先把"已保存登录"的状态摆出来，
+        // 网络回来后再由 [ensureLogin] 自动刷新隧道列表 —— 用户不用每次重新登录。
+        prefs.sakuraToken.value.takeIf { it.isNotBlank() }?.let { saved ->
+            SakuraState(
+                token = saved,
+                user = SakuraUser(prefs.sakuraUserName.value.ifBlank { "已保存登录" }, "", JsonObject(emptyMap())),
+                selectedId = prefs.sakuraTunnelId.value.takeIf { it > 0 },
+                restoring = true,
+                message = "正在恢复登录…",
+            )
+        } ?: SakuraState(),
+    )
     val sakura: StateFlow<SakuraState> = _sakura.asStateFlow()
 
     /** frpc 进程状态（日志也在这里） */
@@ -72,44 +87,77 @@ class NetworkController(
      * 为什么不是用户名密码：樱花开放 API 只支持 Bearer 访问密钥（官网「账户 → 访问密钥」生成），
      * 密码登录带 2FA/风控，官方没有对第三方开放。把密钥加密存在本机，等价于"已登录"。
      */
-    fun loginSakura(token: String) {
+    fun loginSakura(token: String, silent: Boolean = false) {
         val t = token.trim().ifBlank { prefs.sakuraToken.value }
         if (t.isBlank()) {
             _sakura.value = _sakura.value.copy(error = "先填访问密钥（樱花面板 → 账户 → 访问密钥）")
             return
         }
-        _sakura.value = _sakura.value.copy(loading = true, error = null, message = "登录中…")
+        _sakura.value = _sakura.value.copy(loading = true, error = null, message = if (silent) "正在恢复登录…" else "登录中…")
         scope.launch(Dispatchers.IO) {
             try {
                 val user = SakuraFrpApi.userInfo(t)
                 val tunnels = SakuraFrpApi.tunnels(t)
+                // 先把会话元数据落盘，再更新界面：中途被杀进程也不会丢"保持登录"
+                val remembered = prefs.sakuraTunnelId.value
+                val selected = tunnels.firstOrNull { it.id == remembered }?.id ?: tunnels.firstOrNull()?.id
                 prefs.setSakuraToken(t)
+                prefs.setSakuraSession(user.name, selected)
                 _sakura.value = SakuraState(
                     token = t,
                     user = user,
                     loading = false,
                     tunnels = tunnels,
-                    selectedId = tunnels.firstOrNull()?.id,
-                    message = "已登录：${user.name}（${tunnels.size} 条隧道）",
+                    selectedId = selected,
+                    message = if (silent) {
+                        "已恢复登录：${user.name}（${tunnels.size} 条隧道）"
+                    } else {
+                        "已登录：${user.name}（${tunnels.size} 条隧道）"
+                    },
                 )
             } catch (e: Exception) {
-                _sakura.value = _sakura.value.copy(
-                    loading = false,
-                    message = "",
-                    error = e.message ?: "登录失败",
-                )
+                val message = e.message ?: "登录失败"
+                // 密钥被撤销/过期：清掉本地会话，避免每次进页面都拿一个坏令牌重试
+                val authFailed = message.contains("访问密钥") || message.contains("401") || message.contains("403")
+                if (authFailed) {
+                    prefs.clearSakuraSession()
+                    _sakura.value = SakuraState(
+                        error = "登录已失效（$message），请重新填写访问密钥",
+                    )
+                } else {
+                    _sakura.value = _sakura.value.copy(
+                        loading = false,
+                        restoring = false,
+                        message = "",
+                        error = message,
+                    )
+                }
             }
         }
     }
 
+    /**
+     * 进页面时调用：已经存着访问密钥就直接恢复登录（不再让用户输一遍）。
+     *
+     * 只在"有密钥但还没隧道列表"时触发；网络失败保留密钥，用户可点重试。
+     */
+    fun ensureLogin() {
+        val state = _sakura.value
+        if (state.token.isBlank() || state.loading) return
+        if (state.tunnels.isNotEmpty()) return
+        loginSakura(state.token, silent = true)
+    }
+
     fun logoutSakura() {
-        prefs.setSakuraToken("")
+        prefs.clearSakuraSession()
         _sakura.value = SakuraState()
         frpc.stop()
     }
 
     fun selectTunnel(id: Long) {
         _sakura.value = _sakura.value.copy(selectedId = id, error = null)
+        // 记住选择：重启后还是这条隧道
+        prefs.setSakuraSession(_sakura.value.user?.name.orEmpty(), id)
     }
 
     fun startSakura(instance: ServerInstance) {

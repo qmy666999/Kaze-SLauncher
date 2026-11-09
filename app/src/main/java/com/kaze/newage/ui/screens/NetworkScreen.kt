@@ -102,7 +102,11 @@ fun NetworkScreen(
     var frpToken by remember { mutableStateOf(viewModel.uiPrefs.frpToken.value) }
     var remotePort by remember { mutableStateOf(viewModel.uiPrefs.frpRemotePort.value.toString()) }
 
-    LaunchedEffect(Unit) { controller.refreshTailscale() }
+    LaunchedEffect(Unit) {
+        controller.refreshTailscale()
+        // 已保存访问密钥时自动恢复登录，避免每次进应用都重新输密钥
+        controller.ensureLogin()
+    }
 
     fun openUrl(url: String) {
         runCatching {
@@ -189,7 +193,7 @@ fun NetworkScreen(
                 titleIcon = Icons.Filled.Router,
                 supporting = t("在应用内用访问密钥登录，选一条隧道即可启动 frpc；配置由樱花 API 直接生成。"),
                 content = {
-                    if (sakura.user == null) {
+                    if (sakura.token.isBlank()) {
                         OutlinedTextField(
                             value = tokenInput,
                             onValueChange = { tokenInput = it.trim() },
@@ -212,13 +216,30 @@ fun NetworkScreen(
                                 Text(t("打开樱花面板"))
                             }
                         }
+                        Text(
+                            t("登录状态会保持：访问密钥加密存在本机，下次进入自动恢复，只有点「退出登录」才会清除。"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     } else {
                         Text(
-                            t("已登录：%s", sakura.user!!.name),
+                            t("已登录：%s", sakura.user?.name ?: t("已保存登录")),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        TextButton(onClick = { controller.logoutSakura() }) { Text(t("退出登录")) }
+                        if (sakura.restoring || (sakura.loading && sakura.tunnels.isEmpty())) {
+                            Text(
+                                t("正在用已保存的访问密钥恢复登录…"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { controller.logoutSakura() }) { Text(t("退出登录")) }
+                            if (sakura.tunnels.isEmpty() && !sakura.loading) {
+                                TextButton(onClick = { controller.ensureLogin() }) { Text(t("重试")) }
+                            }
+                        }
                         Text(
                             t("选择隧道（%s 条）：", sakura.tunnels.size),
                             style = MaterialTheme.typography.labelMedium,

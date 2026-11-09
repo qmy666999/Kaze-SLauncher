@@ -296,6 +296,13 @@ emember(path) 缓存位图的话，
     //
     // 樱花访问密钥与 MCP 令牌同一套加密存储（AiKeyCipher）；frp 其余字段是普通配置。
     val sakuraToken = mutableStateOf(loadSecret("sakura_token"))
+
+    /** 上次登录的账号名：重启后先显示"已保存登录：xxx"，网络回来再刷新隧道 */
+    val sakuraUserName = mutableStateOf(prefs.getString("sakura_user_name", "") ?: "")
+
+    /** 上次选中的隧道 id：重启后仍然选中那条 */
+    val sakuraTunnelId = mutableStateOf(prefs.getLong("sakura_tunnel_id", 0L))
+
     val frpServer = mutableStateOf(prefs.getString("frp_server", "") ?: "")
     val frpServerPort = mutableStateOf(prefs.getInt("frp_server_port", 7000))
     val frpToken = mutableStateOf(prefs.getString("frp_token", "") ?: "")
@@ -305,6 +312,30 @@ emember(path) 缓存位图的话，
         val t = v.trim()
         sakuraToken.value = t
         prefs.edit().putString("sakura_token", if (t.isEmpty()) "" else (AiKeyCipher.encrypt(t) ?: t)).apply()
+        // 清空密钥时连带清掉会话痕迹，避免下次显示"已保存登录"却没有密钥可用
+        if (t.isEmpty()) clearSakuraSession()
+    }
+
+    /** 登录成功后记住账号名与所选隧道（保持登录的关键：密钥 + 会话元数据） */
+    fun setSakuraSession(userName: String, tunnelId: Long? = null) {
+        sakuraUserName.value = userName
+        if (tunnelId != null && tunnelId > 0) sakuraTunnelId.value = tunnelId
+        prefs.edit()
+            .putString("sakura_user_name", sakuraUserName.value)
+            .putLong("sakura_tunnel_id", sakuraTunnelId.value)
+            .apply()
+    }
+
+    /** 退出登录 / 令牌失效：把密钥与会话元数据一起清掉 */
+    fun clearSakuraSession() {
+        sakuraToken.value = ""
+        sakuraUserName.value = ""
+        sakuraTunnelId.value = 0L
+        prefs.edit()
+            .putString("sakura_token", "")
+            .putString("sakura_user_name", "")
+            .putLong("sakura_tunnel_id", 0L)
+            .apply()
     }
 
     fun setFrp(server: String, serverPort: Int, token: String, remotePort: Int) {

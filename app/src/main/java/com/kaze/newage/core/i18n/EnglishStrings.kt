@@ -1314,5 +1314,8 @@ internal object EnglishStrings {
         "全部停用（%s）" to "Disable all (%s)",
         "崩溃后自动重启" to "Auto-restart after crash",
         "异常退出时自动拉起，最多连续 %s 次（成功启动后计数清零）" to "Restart automatically after an abnormal exit, up to %s times in a row (counter resets after a successful start)",
+        "已保存登录" to "Saved sign-in",
+        "正在用已保存的访问密钥恢复登录…" to "Restoring sign-in with the saved access token…",
+        "登录状态会保持：访问密钥加密存在本机，下次进入自动恢复，只有点「退出登录」才会清除。" to "Sign-in is kept: the access token is stored encrypted on this device and restored automatically; only “Sign out” clears it.",
     )
 }
