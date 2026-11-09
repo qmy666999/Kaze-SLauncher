@@ -1,0 +1,1 @@
+32f628a1d39be936603e59ee680180472cb696ec66f1afe900dc391617eef6aa  Kaze-SLauncher-0.11.1-arm64-signed.apk

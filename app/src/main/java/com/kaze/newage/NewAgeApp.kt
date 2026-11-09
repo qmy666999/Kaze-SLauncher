@@ -1,0 +1,132 @@
+package com.kaze.newage
+
+import android.app.Application
+import android.content.Context
+import com.kaze.newage.core.addons.ModIconCache
+import com.kaze.newage.core.content.ContentSources
+import com.kaze.newage.core.console.ConsoleStream
+import com.kaze.newage.core.i18n.AppLanguage
+import com.kaze.newage.core.i18n.LanguageState
+import com.kaze.newage.core.env.ProotEnvironment
+import com.kaze.newage.core.java.RootfsJavaManager
+import com.kaze.newage.core.log.AppLogStore
+import com.kaze.newage.core.mcp.McpServer
+import com.kaze.newage.core.mcp.McpTools
+import com.kaze.newage.core.server.DefaultServerManager
+import com.kaze.newage.data.InstanceStore
+import com.kaze.newage.data.prefs.SettingsPrefs
+
+/** 应用入口：初始化全局单例 */
+class NewAgeApp : Application() {
+
+    lateinit var container: AppContainer
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        container = AppContainer(this)
+        // 应用界面语言：必须在任何界面创建前把运行时语言定下来，
+        // 否则首帧会用默认语言渲染、随后才「跳」成用户选的语言。
+        LanguageState.apply(AppLanguage.fromId(container.uiPrefs.appLanguage.value), this)
+    }
+}
+
+/** 依赖容器（简单手动 DI，避免引入框架） */
+class AppContainer(context: Context) {
+    val appContext: Context = context.applicationContext
+
+    /**
+     * **应用级**协程作用域：给"不能因为用户退出界面就中断"的长任务用。
+     *
+     * `viewModelScope` 绑在 Activity 的 ViewModelStore 上——按返回键退出应用时会被 clear，
+     * 于是环境部署 / Java 安装 / 核心下载 / 服务端启动都会在挂起点被静默取消，
+     * 而应用文案承诺的是"前台服务守护、后台不被打断"（按 Home 键确实成立，按返回键却不成立）。
+     * 这些任务的成果都落在磁盘上，退出界面后继续跑完才是正确行为。
+     */
+    val appScope: kotlinx.coroutines.CoroutineScope =
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+        )
+
+    val console: ConsoleStream = ConsoleStream()
+
+    val uiPrefs: SettingsPrefs = SettingsPrefs(appContext)
+
+    // Linux 环境目录：默认内部存储；设置里可切换外部存储（空间不足场景，切换后需重新部署）
+    val env: ProotEnvironment = ProotEnvironment(appContext) {
+        val base = if (uiPrefs.envExternal.value) {
+            appContext.getExternalFilesDir(null) ?: appContext.filesDir
+        } else {
+            appContext.filesDir
+        }
+        java.io.File(base, "linux")
+    }
+
+    val javaManager: RootfsJavaManager = RootfsJavaManager(env)
+
+    init {
+        // proot 运行时的首次读取（非 arm64 解压 assets 里的 proot tar；x86_64 首选设备从 APK
+        // 抽 libproot.so）是同步磁盘活，几 MB 起步。谁先在**主线程**上摸到 env.isReady
+        // （设置页刷新 Java、主页状态、环境探测）谁就把首帧卡住 —— 这里主动挂到 IO 上预热，
+        // 后面所有调用都只是几次 stat。ProotEnvironment 自己的 init 里也会判一次就绪状态，
+        // 两处都跑在 IO 上且幂等。
+        env.warmUp()
+
+        // 模组图标缓存目录：列表里显示图标要用它存从 jar 里抽出来的小图。
+        // init 只建目录、不做 IO 重活，放在这里最省事（任何界面都可能先打开模组列表）。
+        ModIconCache.init(appContext.cacheDir)
+
+        // 内容源（官方/镜像/自定义）：越早配置越好，附加搜索与资源中心都依赖它
+        ContentSources.configure(uiPrefs.contentSource.value, uiPrefs.contentSourceCustomUrl.value)
+    }
+
+    val serverManager: DefaultServerManager = DefaultServerManager(env, javaManager, console, appContext)
+
+    val instanceStore: InstanceStore = InstanceStore(appContext, uiPrefs)
+
+    /**
+     * MCP 服务（外部 AI 控制接口，「设置 → MCP 服务」配置）。
+     *
+     * 令牌即时读取（[SettingsPrefs.mcpToken]），重新生成后无需重启服务。
+     */
+    val mcpServer: McpServer = McpServer(
+        tools = McpTools(
+            serverManager = serverManager,
+            instanceById = { instanceStore.get(it) },
+            allInstances = { instanceStore.instances.value },
+            taskScope = appScope,
+        ),
+        serverVersion = BuildConfig.VERSION_NAME,
+        tokenProvider = { uiPrefs.mcpToken.value },
+    )
+
+    init {
+        // 上次退出时开着就直接拉起：服务随应用进程存活，重启应用不该丢配置。
+        // 启动失败（端口全被占）只记 lastError，不影响应用本身。
+        if (uiPrefs.mcpEnabled.value) {
+            mcpServer.start(
+                preferredPort = uiPrefs.mcpPort.value,
+                rangeStart = uiPrefs.mcpPortRangeStart.value,
+                rangeEnd = uiPrefs.mcpPortRangeEnd.value,
+                bindAddress = uiPrefs.mcpBindAddress.value,
+            )
+        }
+    }
+
+    /**
+     * 应用自身的日志采集（「设置 → 诊断日志」查看）。
+     *
+     * 在这里 start 而不是在界面里：日志的价值恰恰在于**崩溃前那一段**，
+     * 挂在界面上会因为切页/退出而中断，事后就查不到了。
+     */
+    val appLog: AppLogStore = AppLogStore(appContext).also {
+        // 先装崩溃处理器再开采集：闪退时采集器会随进程一起死，
+        // 只有同线程同步落盘的处理器才能保证现场留下
+        it.installCrashHandler()
+        it.start(appScope)
+    }
+}
+
+/** 便捷获取容器 */
+val Context.container: AppContainer
+    get() = (applicationContext as NewAgeApp).container

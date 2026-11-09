@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+      maxSdkVersion 必须是 29（Android 10）而不是 28：
+      StorageDirUtil.hasAllFilesAccess() 在 SDK < 30 时查的就是这个权限，而「所有文件访问」
+      （MANAGE_EXTERNAL_STORAGE）是 API 30 才有的概念。写成 28 的话 Android 10 上这个权限
+      根本不存在 —— 运行时申请被系统**直接拒绝**（连弹窗都不会出现），于是「选择自定义实例
+      目录」永远失败，默认实例根 /sdcard/KazeS 也拿不到写权限。
+      11+ 改走 MANAGE_EXTERNAL_STORAGE，本权限在那里没有意义，所以止于 29。（需真机在
+      Android 10 上验证一次授权流程）
+    -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 自定义实例目录：把游戏存到用户任意目录并直接运行（Android 11+ 分区存储下 File API 前提） -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!--
+      「显示在其他应用上层」：本应用**唯一**的用途是 AI 助手的「本机浏览器搜索」——
+      把 1px 透明、不可触摸、不可聚焦的 WebView 挂进真实窗口，让渲染器以全优先级调度，
+      避免被激进后台管理的 ROM 冻结（不授予则自动回退无头模式，功能仍可用）。
+      不声明它的话，代码里那条真窗口分支永远走不到（Settings.canDrawOverlays 恒为 false），
+      设置页的"去授权"引导也变成死端。
+    -->
+
+    <application
+        android:name=".NewAgeApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/Theme.KazeSLauncher">
+
+        <!-- 岚壳：自绘原生 View 的界面层（新主题样式），作为桌面入口 -->
+        <activity
+            android:name=".shell.ShellActivity"
+            android:exported="true"
+            android:theme="@style/Theme.KazeShell"
+            android:windowSoftInputMode="adjustNothing"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout|smallestScreenSize|fontScale|locale|layoutDirection|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 原 Compose 界面：不再挂 LAUNCHER，保留可被显式启动（对照/回退用） -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustNothing"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout|smallestScreenSize|fontScale|locale|layoutDirection|density">
+        </activity>
+
+        <!-- 服务端守护前台服务：specialUse 类型（无 6 小时时限）+ 显式子类型属性（缺一即 SecurityException） -->
+        <service
+            android:name=".core.service.ServerGuardService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Minecraft 服务器守护：保持服务端进程在应用退到后台时不被系统回收" />
+        </service>
+
+        <!-- 更新 APK 安装：cacheDir/updates 下的文件经 FileProvider 授权给系统安装器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

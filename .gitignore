@@ -1,0 +1,51 @@
+# Gradle
+.gradle/
+build/
+**/build/
+gradle-user-home/
+.gradle-user-home/
+
+# Android Studio / IDEA
+.idea/
+*.iml
+local.properties
+
+# Kotlin
+.kotlin/
+
+# 临时目录
+.tmp/
+*.log
+captures/
+# 只忽略仓库根目录的截图文件夹（/前缀=仅根目录，不影响 app/.../ui/screens/ 源码）
+/screens/
+.externalNativeBuild/
+.cxx/
+
+# 签名
+*.jks
+*.keystore
+!debug.keystore
+# 发布密钥一律不入库：这里刻意不再为任何 release keystore 开白名单
+# （原 `!release-keystore.jks` 会把误放进来的发布密钥放行入库 → 密钥泄露 = 任何人都能伪造更新包）
+
+# 构建产物（严禁入库）
+*.apk
+*.aab
+
+# dist/ 例外：随仓库提交的已签名安装包（方便没有构建环境的用户直接安装）
+!dist/
+!dist/*.apk
+
+# 个人记忆文件（不入库）
+MEMORY.md
+
+# 宣传视频与产物（不入库）
+/videos/
+/video.mp4
+
+# 本地工具忽略文件：只在本机生效，绝不入库（用户要求）
+.zcodeignore
+# .zcode/ 是本机工具（zcode）的产物目录（plans/ 等会话文件），与项目无关。
+# 上次 .zcodeignore 被 `git add -A` 顺手提进了仓库，这次直接把整个目录挡在门外。
+.zcode/

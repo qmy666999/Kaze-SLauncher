@@ -1,0 +1,637 @@
+package com.kaze.newage.core.ai
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+
+@Serializable
+internal data class ChatResponseDto(
+    val choices: List<ChoiceDto> = emptyList(),
+    val usage: UsageDto? = null,
+)
+
+@Serializable
+internal data class UsageDto(
+    val prompt_tokens: Int = 0,
+    val completion_tokens: Int = 0,
+    val prompt_tokens_details: PromptDetailsDto? = null,
+    val completion_tokens_details: CompletionDetailsDto? = null,
+)
+
+@Serializable
+internal data class PromptDetailsDto(val cached_tokens: Int = 0)
+
+@Serializable
+internal data class CompletionDetailsDto(val reasoning_tokens: Int = 0)
+
+private fun UsageDto?.toAiUsage(): AiUsage? = this?.let {
+    AiUsage(
+        promptTokens = it.prompt_tokens,
+        completionTokens = it.completion_tokens,
+        cachedTokens = it.prompt_tokens_details?.cached_tokens ?: 0,
+        reasoningTokens = it.completion_tokens_details?.reasoning_tokens ?: 0,
+    )
+}
+
+@Serializable
+internal data class ChoiceDto(
+    val message: MessageDto = MessageDto(),
+    val finish_reason: String? = null,
+)
+
+@Serializable
+internal data class MessageDto(
+    val role: String = "",
+    val content: String? = null,
+    /** 思考内容存在多种形态，统一用 JsonElement 接再规范化（见 [normalizeReasoning]） */
+    val reasoning_content: kotlinx.serialization.json.JsonElement? = null,
+    /** OpenRouter 风格的推理字段（字符串 / 数组 / 对象都可能） */
+    val reasoning: kotlinx.serialization.json.JsonElement? = null,
+    /** OpenRouter 新版的部分供应商走 reasoning_details */
+    val reasoning_details: kotlinx.serialization.json.JsonElement? = null,
+    /** 原生工具调用（非流式响应） */
+    val tool_calls: List<StreamToolCallDto> = emptyList(),
+)
+
+// ── 流式（SSE）──
+
+@Serializable
+internal data class ChatStreamChunkDto(
+    val choices: List<StreamChoiceDto> = emptyList(),
+    val usage: UsageDto? = null,
+)
+
+@Serializable
+internal data class StreamChoiceDto(
+    val delta: DeltaDto = DeltaDto(),
+    val finish_reason: String? = null,
+)
+
+@Serializable
+internal data class DeltaDto(
+    val content: String? = null,
+    val reasoning_content: String? = null,
+    /** 流式原生工具调用：按 index 分片到达，需要拼装 */
+    val tool_calls: List<StreamToolCallDto> = emptyList(),
+)
+
+@Serializable
+internal data class StreamToolCallDto(
+    val index: Int = 0,
+    val id: String? = null,
+    val type: String? = null,
+    val function: FnDto? = null,
+)
+
+@Serializable
+internal data class FnDto(val name: String? = null, val arguments: String? = null)
+
+/** 一轮对话的完整回复：正文 + 可选的思考过程 + 用量 + 原生工具调用 */
+data class AiReply(
+    /** 模型的推理过程（reasoning_content 或正文里的 <think> 段）；null = 没有思考内容 */
+    val reasoning: String?,
+    /** 最终回答正文 */
+    val content: String,
+    /** token 用量（含缓存命中/思考拆分）；null = 服务商未返回 */
+    val usage: AiUsage? = null,
+    /** 原生工具调用（function calling）；空 = 无 */
+    val toolCalls: List<NativeToolCall> = emptyList(),
+    /** 原生工具调用的原始 JSON（回喂历史保真用） */
+    val rawToolCallsJson: String? = null,
+    /** true = 因取消/超时中止，内容是不完整的半成品 */
+    val aborted: Boolean = false,
+)
+
+/** 原生 function calling 的一次调用（arguments 是待解析的 JSON 字符串） */
+data class NativeToolCall(val id: String, val name: String, val arguments: String)
+
+/** token 用量（官方 usage 字段，含缓存命中与思考拆分） */
+data class AiUsage(
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val cachedTokens: Int,
+    val reasoningTokens: Int,
+) {
+    /** 气泡尾部的摘要行；无数据返回 null */
+    fun summary(): String? {
+        if (promptTokens <= 0 && completionTokens <= 0) return null
+        return buildString {
+            append("输入 ").append(fmt(promptTokens))
+            if (cachedTokens > 0) append("（缓存命中 ").append(fmt(cachedTokens)).append('）')
+            append(" · 输出 ").append(fmt(completionTokens))
+            if (reasoningTokens > 0) append("（思考 ").append(fmt(reasoningTokens)).append('）')
+        }
+    }
+
+    private fun fmt(n: Int): String =
+        if (n >= 1000) "${"%.1f".format(n / 1000f)}K" else "$n"
+}
+
+/**
+ * OpenAI 兼容对话客户端（/chat/completions，非流式）。
+ *
+ * 与 ModrinthApi 同一套做法：同步 HttpURLConnection + kotlinx-serialization，
+ * 无新增依赖。所有失败都以 RuntimeException 抛出、消息面向用户 ——
+ * 特别注意错误信息里**绝不回显请求头**（那里面有 API Key）。
+ */
+object AiClient {
+
+    private const val CONNECT_TIMEOUT_MS = 15_000
+    // 模型生成本来就可能要几十秒：readTimeout 必须给足，否则长回答永远超时。
+    // 深度思考先出推理再出答案，时间翻倍是常态，给到 4 分钟。
+    private const val READ_TIMEOUT_MS = 120_000
+    private const val THINKING_READ_TIMEOUT_MS = 240_000
+    private const val USER_AGENT = "KazeSLauncher/0.4 (com.kaze.newage; ai assistant)"
+
+    /** 流式看门狗的轮询间隔：停止条件（取消/超时）最多延迟这么久生效 */
+    private const val WATCHDOG_POLL_MS = 200L
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * 当前在飞的连接。
+     *
+     * HttpURLConnection 是阻塞的：只置一个"取消"标志位的话，用户点了取消之后线程仍然卡在
+     * `responseCode` / `read` 上直到 readTimeout（思考模式最长 240 秒），界面看着像没反应。
+     * 这里登记连接，取消时把它关掉，让阻塞中的读尽早结束。
+     *
+     * **实测边界（别当成"立刻中断"）**：读已经卡在 socket 上时，JDK 的 `disconnect()`
+     * 自身会阻塞到 readTimeout 才返回（实测约 119 秒）—— 所以界面路径**必须**走
+     * [cancelActiveAsync]，同步调用会把 UI 线程卡住；已经发出去的请求，服务端该计费还是计费
+     * （那是服务端的账），我们能保证的是界面立刻停止等待、本轮结果丢弃、不再发起下一轮。
+     */
+    private val activeCall = java.util.concurrent.atomic.AtomicReference<HttpURLConnection?>(null)
+
+    /**
+     * 中断当前在飞的请求（没有请求时是空操作）。**会阻塞**（见 [activeCall]），
+     * 只允许在后台线程调用 —— 界面路径请用 [cancelActiveAsync]。
+     */
+    fun cancelActive() {
+        activeCall.getAndSet(null)?.let { conn ->
+            runCatching { conn.disconnect() }
+        }
+    }
+
+    /** 取消的界面入口：把可能阻塞的 [cancelActive] 丢到独立守护线程，绝不让 UI 线程等它 */
+    fun cancelActiveAsync() {
+        kotlin.concurrent.thread(isDaemon = true, name = "kaze-ai-cancel") {
+            // 守护线程的未捕获异常会直接 FATAL 掉整个应用（见 kaze-ai-watchdog 那次崩溃）。
+            // 取消本身是尽力而为：disconnect 抛错时最多是这轮没被立刻掐断。
+            runCatching { cancelActive() }
+        }
+    }
+
+    /**
+     * 明文 http 的提前拦截。
+     *
+     * targetSdk 28 起平台默认禁止明文（`CLEARTEXT communication to … not permitted` 是底层文案，
+     * 用户看了不知道该改什么）。只有 `network_security_config.xml` 里放行的本机地址能用 http，
+     * 这里按同一份名单提前给出可读原因；名单在 [AiConfig.isCleartextHostAllowed]，
+     * 两处必须一致，否则会出现"提示说可以、实际连不上"。
+     */
+    private fun requireCleartextAllowed(endpoint: String) {
+        val uri = runCatching { java.net.URI(endpoint) }.getOrNull() ?: return
+        if (!uri.scheme.equals("http", ignoreCase = true)) return
+        if (AiConfig.isCleartextHostAllowed(uri.host)) return
+        throw RuntimeException(
+            "明文 http 只允许本机地址（localhost / 127.0.0.1 / ::1）：当前是 ${uri.host ?: endpoint}，" +
+                "请改用 https（局域网/公网端点必须加密，API Key 不能明文发出去）"
+        )
+    }
+
+    /**
+     * 流式对话（SSE）：思考过程与正文**逐 token 回调**，取消/超时即时生效。
+     *
+     * 与 [chat] 的分工：chat 留给小请求（搜索查询词生成）；主对话一律走这里 ——
+     * 实时显示思考过程、取消真生效（掐断连接）、Qwen 等仅流式返回思考内容的服务商也能兼容。
+     *
+     * SSE 行协议：`data: {chunk}` / `data: [DONE]`；`:` 开头的 keep-alive 注释跳过。
+     * [shouldStop] 在每行边界检查（取消 / 整体超时），命中时**停止读取**并返回
+     * 已累积的半成品（[AiReply.aborted] = true）—— socket 由 finally 关闭。
+     *
+     * 思考内容有两个来源，都会实时走 `onDelta(reasoningDelta=…)`：
+     *  1. 官方协议的独立字段 `reasoning_content`；
+     *  2. 把推理混在正文里的服务商 —— 正文增量由 [AiThinkParser] 流式剥离
+     *     `<think>` / `<thinking>` 段（支持标签跨 chunk 切断），正文保持干净。
+     * 结束时两条来源合并进 [AiReply.reasoning]，不会互相覆盖或重复。
+     */
+    fun chatStream(
+        config: AiConfig,
+        messages: List<AiMessage>,
+        maxTokens: Int = 1024,
+        extraJson: String? = null,
+        thinkingEnabled: Boolean = false,
+        includeNativeThinkingParam: Boolean = false,
+        includeTools: Boolean = false,
+        includeExecuteCommand: Boolean = false,
+        shouldStop: () -> Boolean = { false },
+        onDelta: (reasoningDelta: String?, contentDelta: String?) -> Unit = { _, _ -> },
+    ): AiReply {
+        val endpoint = config.endpoint
+        if (endpoint.isEmpty()) {
+            throw RuntimeException("AI 服务地址无效：${config.baseUrl.trim()}（需以 http(s):// 开头）")
+        }
+        if (config.apiKey.isBlank()) throw RuntimeException("尚未配置 API Key")
+        requireCleartextAllowed(endpoint)
+        val requestBody = buildRequestBody(
+            config.requestModel, messages, maxTokens, extraJson,
+            thinkingEnabled, includeNativeThinkingParam, stream = true,
+            includeTools = includeTools, includeExecuteCommand = includeExecuteCommand,
+        )
+        val conn = URL(endpoint).openConnection() as HttpURLConnection
+        // 登记在飞连接：取消/离开页面时才能真的把它掐断（见 [activeCall]）。
+        // 用 CAS 清理而不是 set(null)：两轮请求交错时，后结束的那个不该把新登记的那条抹掉。
+        activeCall.set(conn)
+        val nativeReasoning = StringBuilder()
+        val inlineReasoning = StringBuilder()
+        val content = StringBuilder()
+        // 正文增量先过 <think> 状态机：思考段的文本进 reasoning，其余进正文
+        val think = AiThinkParser { isThinking, text ->
+            if (isThinking) {
+                inlineReasoning.append(text)
+                onDelta(text, null)
+            } else {
+                content.append(text)
+                onDelta(null, text)
+            }
+        }
+        var usage: AiUsage? = null
+        val toolCallsById = LinkedHashMap<Int, StringBuilder>()          // arguments 分片
+        val toolCallNames = LinkedHashMap<Int, String>()
+        val toolCallIds = LinkedHashMap<Int, String>()
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = if (config.thinking) THINKING_READ_TIMEOUT_MS else READ_TIMEOUT_MS
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Accept", "text/event-stream")
+            conn.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+            conn.setRequestProperty("User-Agent", USER_AGENT)
+            conn.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code != 200) {
+                val errBody = runCatching { AiBodyLimit.readErrorText(conn.errorStream) }.getOrDefault("")
+                throw RuntimeException(describeHttpError(code, errBody))
+            }
+            var aborted = false
+            // 看门狗：shouldStop 只能在行边界生效，模型长时间不出 token 时阻塞读感知不到
+            // （取消/超时就停在这里）。看门狗轮询到停止条件就 disconnect，强制阻塞读立刻返回。
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            val watchdog = kotlin.concurrent.thread(isDaemon = true, name = "kaze-ai-watchdog") {
+                try {
+                    while (!done.get()) {
+                        if (shouldStop()) {
+                            runCatching { conn.disconnect() }
+                            break
+                        }
+                        try {
+                            Thread.sleep(WATCHDOG_POLL_MS)
+                        } catch (_: InterruptedException) {
+                            // 正常收尾路径会 interrupt() 本线程（见下面的 done.set(true)/interrupt()）。
+                            // 旧实现没接这个异常：守护线程抛未捕获异常 = 整个进程 FATAL EXCEPTION，
+                            // 用户日志里的 "FATAL EXCEPTION: kaze-ai-watchdog / InterruptedException"
+                            // 就是这条路径，而且是必现的（每次流式请求正常结束都会走到）。
+                            // 中断即退出循环，不需要再判断 done。
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // 守护线程里的任何异常都不该把进程带走：这里是纯粹的辅助轮询，
+                    // 出错最多是"取消不即时生效"，主流程还有 shouldStop() 在行边界兜底。
+                }
+            }
+            // 流式也要有总量上限：不结束的流能让循环永远跑下去，单行还可能无限长（见 CappedStream）
+            val stream = AiBodyLimit.CappedStream(conn.inputStream, AiBodyLimit.MAX_STREAM_BYTES)
+            stream.bufferedReader().use { reader ->
+                while (true) {
+                    if (shouldStop()) {
+                        aborted = true
+                        break
+                    }
+                    val line = reader.readLine() ?: break
+                    val t = line.trim()
+                    if (t.isEmpty() || t.startsWith(":")) continue
+                    if (!t.startsWith("data:")) continue
+                    val payload = t.removePrefix("data:").trim()
+                    if (payload == "[DONE]") break
+                    val chunk = runCatching { json.decodeFromString<ChatStreamChunkDto>(payload) }.getOrNull()
+                        ?: continue
+                    chunk.usage?.let { usage = it.toAiUsage() }
+                    val delta = chunk.choices.firstOrNull()?.delta ?: continue
+                    delta.reasoning_content?.takeIf { it.isNotEmpty() }?.let {
+                        nativeReasoning.append(it)
+                        onDelta(it, null)
+                    }
+                    // 正文交给状态机分流；一个 chunk 里可能同时包含正文与思考段，
+                    // 也可能只包含半个标签（此时不会有任何回调，等下一个 chunk）
+                    delta.content?.takeIf { it.isNotEmpty() }?.let { chunkText ->
+                        think.accept(chunkText)
+                    }
+                    for (tc in delta.tool_calls) {
+                        tc.id?.let { toolCallIds[tc.index] = it }
+                        tc.function?.name?.let { toolCallNames[tc.index] = it }
+                        tc.function?.arguments?.let { arg ->
+                            toolCallIds.getOrPut(tc.index) { "" }
+                            toolCallNames.getOrPut(tc.index) { "" }
+                            toolCallById(toolCallsById, tc.index).append(arg)
+                        }
+                    }
+                }
+                // 看门狗 disconnect 后 readLine 可能返回 null（流被关）而不是抛异常：
+                // 出循环后再确认一次停止条件，别把被中止的半成品当完整回答
+                if (!aborted && shouldStop()) aborted = true
+                // 收尾：未闭合的思考段内容已经实时进 reasoning，残留的半个标签丢弃
+                think.finish()
+            }
+            done.set(true)
+            watchdog.interrupt()
+            // 触到流上限和用户取消同义：这轮拿到的是半成品，不能当完整回答用
+            if (stream.capped) aborted = true
+            val toolCalls = toolCallNames.mapNotNull { (index, name) ->
+                if (name.isEmpty()) return@mapNotNull null
+                NativeToolCall(
+                    id = toolCallIds[index] ?: "call_$index",
+                    name = name,
+                    arguments = toolCallsById[index]?.toString() ?: "",
+                )
+            }
+            return AiReply(
+                reasoning = mergeReasoning(nativeReasoning.toString(), inlineReasoning.toString()),
+                content = content.toString(),
+                usage = usage,
+                toolCalls = toolCalls,
+                rawToolCallsJson = toolCalls.takeIf { it.isNotEmpty() }
+                    ?.let { list -> json.encodeToString(list.map { JsonTc(id = it.id, name = it.name, arguments = it.arguments) }) },
+                aborted = aborted,
+            )
+        } catch (e: IOException) {
+            think.finish()
+            // 半成品也保得住：流中断时已有内容的场景，交给调用方决定展示或报错
+            if (content.isNotEmpty() || nativeReasoning.isNotEmpty() || inlineReasoning.isNotEmpty()) {
+                return AiReply(
+                    reasoning = mergeReasoning(nativeReasoning.toString(), inlineReasoning.toString()),
+                    content = content.toString(),
+                    usage = usage,
+                    aborted = true,
+                )
+            }
+            // 取消/超时导致的连接中断不是网络故障：报"无法连接"会误导用户去查网络
+            if (shouldStop()) return AiReply(reasoning = null, content = "", usage = usage, aborted = true)
+            throw RuntimeException("无法连接 AI 服务（${e.message ?: "网络错误"}）：请检查网络与 API 地址", e)
+        } finally {
+            activeCall.compareAndSet(conn, null)
+            conn.disconnect()
+        }
+    }
+
+    @Serializable
+    private data class JsonTc(val id: String, val name: String, val arguments: String)
+
+    private fun toolCallById(map: LinkedHashMap<Int, StringBuilder>, index: Int): StringBuilder =
+        map.getOrPut(index) { StringBuilder() }
+
+    /**
+     * 请求体构建（独立出来便于单测：不发起真实网络请求就能锁住请求格式）。
+     * temperature 压低（0.3）：诊断要的是准确，不是发散；stream 显式 false。
+     */
+    internal fun buildRequestBody(
+        model: String,
+        messages: List<AiMessage>,
+        maxTokens: Int = 1024,
+        extraJson: String? = null,
+        thinkingEnabled: Boolean = false,
+        includeNativeThinkingParam: Boolean = false,
+        stream: Boolean = false,
+        includeTools: Boolean = false,
+        includeExecuteCommand: Boolean = false,
+    ): String = buildJsonObject {
+        put("model", model)
+        put("stream", stream)
+        // 用量走最后一个内容 chunk 回来（官方规则：include_usage 必须配 stream，否则 400）
+        if (stream) {
+            putJsonObject("stream_options") { put("include_usage", true) }
+        }
+        put("temperature", 0.3)
+        put("max_tokens", maxTokens)
+        // 原生 function calling（仅官方 DeepSeek 场景；第三方走 JSON 夹带协议）。
+        // 官方约束：思考模式下 tool_choice 不支持 required/named —— 我们用默认 auto，合规。
+        if (includeTools) {
+            runCatching {
+                val tools = buildJsonArray {
+                    (json.parseToJsonElement(FILE_TOOLS_SPEC) as kotlinx.serialization.json.JsonArray)
+                        .forEach { add(it) }
+                    if (includeExecuteCommand) {
+                        add(json.parseToJsonElement(EXECUTE_TOOL_SPEC))
+                    }
+                }
+                put("tools", tools)
+            }
+        }
+        putJsonArray("messages") {
+            messages.forEach { m ->
+                add(buildJsonObject {
+                    put("role", m.role)
+                    if (m.role == AiMessage.ROLE_TOOL) {
+                        // 工具结果消息：content + 对应的调用 id
+                        put("content", m.content)
+                        m.toolCallId?.let { put("tool_call_id", it) }
+                    } else {
+                        // 带原生工具调用的 assistant 消息：content 可为空，工具调用原样回喂
+                        if (m.content.isNotEmpty()) put("content", m.content)
+                        m.toolCallsRaw?.takeIf { it.isNotBlank() }?.let { raw ->
+                            runCatching { put("tool_calls", json.parseToJsonElement(raw)) }
+                        }
+                        if (m.content.isEmpty() && m.toolCallsRaw == null) put("content", "")
+                    }
+                })
+            }
+        }
+        // DeepSeek V4 机制：思考模式由 thinking 参数控制（enabled/disabled，官方默认 enabled）。
+        // 显式发送保证与「深度思考」开关的确定性对应。只在官方 DeepSeek 场景发送 ——
+        // 第三方网关（模型名同为 deepseek-* 但走别家协议）对未知参数可能直接 400。
+        if (includeNativeThinkingParam) {
+            put("thinking", buildJsonObject {
+                put("type", if (thinkingEnabled) "enabled" else "disabled")
+            })
+        }
+        // 档案的附加参数最后合入：其它服务商要显式开启思考输出（如 Qwen 的
+        // {"enable_thinking":true}），也允许覆盖 temperature 等采样参数；
+        // model 与 messages 不允许被覆盖，非法 JSON 整体忽略
+        val extra = extraJson?.trim().takeUnless { it.isNullOrEmpty() }?.let {
+            runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) }.getOrNull()
+        }
+        if (extra is kotlinx.serialization.json.JsonObject) {
+            extra.forEach { (key, value) ->
+                if (key != "model" && key != "messages") put(key, value)
+            }
+        }
+    }.toString()
+
+    /**
+     * 是否发送 DeepSeek 原生 `thinking` 参数：官方 V4 模型名，或端点就是 DeepSeek 官方域。
+     * 第三方网关一律不发，避免未知参数被严格校验拒绝（要用就走「附加请求参数」显式指定）。
+     */
+    internal fun supportsNativeThinkingParam(model: String, baseUrl: String): Boolean {
+        val m = model.trim().lowercase()
+        if (m in DEEPSEEK_V4_MODELS) return true
+        return baseUrl.contains("deepseek.com", ignoreCase = true) && m.startsWith("deepseek")
+    }
+
+    /** 官方现行模型名（V4 家族；thinking 参数由它们支持） */
+    private val DEEPSEEK_V4_MODELS = setOf(
+        "deepseek-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+    )
+
+    /** execute_command 工具：仅当用户开启命令自动执行档位时才并入工具列表 */
+    internal const val EXECUTE_TOOL_SPEC =
+        """{"type":"function","function":{"name":"execute_command","description":"直接执行一条 Minecraft 服务端控制台命令（结果会写进控制台，下一轮返回执行摘要）。仅在工具列表提供它时才可调用。","parameters":{"type":"object","properties":{"command":{"type":"string","description":"完整命令，不带 /"}},"required":["command"]}}}"""
+
+    /**
+     * 原生 function calling 的工具清单（OpenAI function 格式）。
+     * 只覆盖只读工具 + write_file；写文件仍走"用户确认卡片"的同一套审批，
+     * 协议换了安全语义不变。arguments 由模型生成，**可能是非法 JSON**（官方文档明示），
+     * 调用方必须 runCatching 解析。
+     */
+    internal const val FILE_TOOLS_SPEC = """[
+{"type":"function","function":{"name":"read_file","description":"读取服务端实例目录下的文本文件（配置/日志/脚本）。app: 前缀 = 启动器应用目录（**只读，且只开放 logs/、ai_audit.log、diagnostics.txt**）。二进制、备份文件与大文件会被拒绝。","parameters":{"type":"object","properties":{"path":{"type":"string","description":"相对实例根目录的路径"}},"required":["path"]}}},
+{"type":"function","function":{"name":"list_dir","description":"列出实例目录（或 app: 应用目录，只开放日志与诊断报告）下的条目，目录在前。","parameters":{"type":"object","properties":{"path":{"type":"string","description":"相对路径，. 表示根目录"}},"required":["path"]}}},
+{"type":"function","function":{"name":"write_file","description":"写入/覆盖实例目录下的文本文件（需用户在界面上确认；覆盖已有文件自动留一份带时间戳的备份）。.jar 等二进制、.bak 备份与授权类文件（ops.json/eula.txt/whitelist.json 等）被禁止。","parameters":{"type":"object","properties":{"path":{"type":"string","description":"相对实例根目录的路径"},"content":{"type":"string","description":"完整的新文件内容"}},"required":["path","content"]}}},
+{"type":"function","function":{"name":"fetch_page","description":"抓取搜索结果里出现的网页正文（http/https），用于把攻略或文档读全。","parameters":{"type":"object","properties":{"url":{"type":"string","description":"完整网页地址"}},"required":["url"]}}},
+{"type":"function","function":{"name":"read_memory","description":"读取你对这台服务器的长期记忆笔记（端口、玩家习惯、已解决的问题等）。","parameters":{"type":"object","properties":{}}}},
+{"type":"function","function":{"name":"write_memory","description":"以覆盖方式更新长期记忆笔记（保持精炼，只记长期有用的事实）。","parameters":{"type":"object","properties":{"content":{"type":"string","description":"完整的新笔记内容"}},"required":["content"]}}}
+]"""
+
+    /**
+     * 同步发起一轮对话，返回 assistant 文本。**阻塞调用**：必须在 IO 线程跑
+     * （调用方负责放独立线程 + 界面可见超时，见 ui/ai/AiChatController.askAi ——
+     * 该方法原先在 AppViewModel 里，重构后已搬进 AiChatController）。
+     */
+    fun chat(config: AiConfig, messages: List<AiMessage>, maxTokens: Int = 1024): AiReply {
+        val endpoint = config.endpoint
+        if (endpoint.isEmpty()) {
+            throw RuntimeException("AI 服务地址无效：${config.baseUrl.trim()}（需以 http(s):// 开头）")
+        }
+        if (config.apiKey.isBlank()) throw RuntimeException("尚未配置 API Key")
+        requireCleartextAllowed(endpoint)
+        val conn = URL(endpoint).openConnection() as HttpURLConnection
+        activeCall.set(conn)
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = if (config.thinking) THINKING_READ_TIMEOUT_MS else READ_TIMEOUT_MS
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+            conn.setRequestProperty("User-Agent", USER_AGENT)
+            conn.outputStream.use {
+                it.write(
+                    buildRequestBody(
+                        config.requestModel,
+                        messages,
+                        maxTokens,
+                        config.extraBody,
+                        thinkingEnabled = config.thinking,
+                        includeNativeThinkingParam = supportsNativeThinkingParam(
+                            config.requestModel, config.baseUrl,
+                        ),
+                    ).toByteArray(Charsets.UTF_8)
+                )
+            }
+            val code = conn.responseCode
+            if (code != 200) {
+                val errBody = runCatching { AiBodyLimit.readErrorText(conn.errorStream) }.getOrDefault("")
+                throw RuntimeException(describeHttpError(code, errBody))
+            }
+            // 流式读取 + 上限：readText() 会让异常/恶意端点用一个大响应体把应用 OOM（见 AiBodyLimit）
+            val body = AiBodyLimit.read(conn.inputStream)
+            if (body.truncated) {
+                throw RuntimeException(
+                    "AI 返回的响应体超过 ${AiBodyLimit.MAX_BODY_BYTES / 1024 / 1024}MB，已中止读取：" +
+                        "该端点响应异常，请检查服务地址是否正确"
+                )
+            }
+            return parseReply(body.text)
+        } catch (e: IOException) {
+            // DNS 失败 / 连不上 / 超时都到这里；底层 message 很晦涩（如 "Unable to resolve host"），补一句人话
+            throw RuntimeException("无法连接 AI 服务（${e.message ?: "网络错误"}）：请检查网络与 API 地址", e)
+        } finally {
+            activeCall.compareAndSet(conn, null)
+            conn.disconnect()
+        }
+    }
+
+    internal fun parseReply(body: String): AiReply {
+        val resp = runCatching { json.decodeFromString<ChatResponseDto>(body) }.getOrElse {
+            throw RuntimeException("AI 返回了无法解析的内容（HTTP 200 但不是预期的 JSON）")
+        }
+        val message = resp.choices.firstOrNull()?.message
+            ?: throw RuntimeException("AI 返回为空（choices 为空）")
+        val reasoning = normalizeReasoning(message.reasoning_content)
+            ?: normalizeReasoning(message.reasoning)
+            ?: normalizeReasoning(message.reasoning_details)
+        return AiReply(
+            reasoning = reasoning?.takeIf { it.isNotBlank() },
+            content = message.content ?: "",
+            usage = resp.usage.toAiUsage(),
+            toolCalls = message.tool_calls.mapNotNull { it.toNativeToolCall() },
+            rawToolCallsJson = message.tool_calls.takeIf { it.isNotEmpty() }
+                ?.let { runCatching { kotlinx.serialization.json.Json.encodeToString(it) }.getOrNull() },
+        )
+    }
+
+    /** 非流式 tool_calls DTO → 公开模型（arguments 可能是非法 JSON，原样交给调用方校验） */
+    private fun StreamToolCallDto.toNativeToolCall(): NativeToolCall? {
+        val id = id ?: return null
+        val name = function?.name ?: return null
+        return NativeToolCall(id, name, function.arguments ?: "")
+    }
+
+    /**
+     * 各家推理字段的形态兼容：
+     *  - 字符串（DeepSeek / 硅基流动 / 智谱等绝大多数）
+     *  - 数组（分段推理：元素是字符串或 {text|summary|content} 对象）
+     *  - 对象（单个 {text|summary|content}）
+     * 都归一成一段文本；没有任何文本则返回 null。
+     */
+    private fun normalizeReasoning(el: kotlinx.serialization.json.JsonElement?): String? = when (el) {
+        null -> null
+        is kotlinx.serialization.json.JsonNull -> null
+        is kotlinx.serialization.json.JsonPrimitive -> el.content.takeIf { it.isNotBlank() }
+        is kotlinx.serialization.json.JsonArray -> el.mapNotNull { normalizeReasoning(it) }
+            .joinToString("\n").takeIf { it.isNotBlank() }
+        is kotlinx.serialization.json.JsonObject -> normalizeReasoning(
+            el["text"] ?: el["summary"] ?: el["content"]
+        )
+    }
+
+    /**
+     * 常见错误码 → 人话；响应体第一行（官方通常写明原因，如 402 余额不足）截 160 字符附上。
+     */
+    internal fun describeHttpError(code: Int, body: String): String {
+        val hint = body.lineSequence().firstOrNull { it.isNotBlank() }?.take(160) ?: ""
+        val base = when (code) {
+            401 -> "API Key 无效或未授权（HTTP 401）"
+            402 -> "账户余额不足（HTTP 402）"
+            404 -> "接口地址不存在（HTTP 404）：检查服务地址是否需要以 /v1 结尾"
+            429 -> "请求过于频繁或额度受限（HTTP 429）"
+            in 500..599 -> "AI 服务端错误（HTTP $code）：稍后再试"
+            else -> "AI 服务返回 HTTP $code"
+        }
+        return if (hint.isBlank()) base else "$base：$hint"
+    }
+}

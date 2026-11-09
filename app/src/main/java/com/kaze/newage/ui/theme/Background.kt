@@ -1,0 +1,189 @@
+package com.kaze.newage.ui.theme
+
+import android.provider.Settings
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.platform.LocalContext
+import kotlin.math.PI
+import kotlin.math.max
+import kotlin.math.sin
+
+/**
+ * 主题背景层。
+ * CLEAR=平面渐变；GLASS=纯色渐变底 + 缓慢漂移的柔光斑（用户要求保持纯色，2026-08-15）。
+ */
+
+/** 系统「动画时长缩放」为 0 时视为用户要求减弱动画 */
+@Composable
+fun reducedMotion(): Boolean {
+    val context = LocalContext.current
+    return remember(context) {
+        runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+}
+
+/**
+ * 界面是否处于前台（RESUMED）。
+ *
+ * `rememberInfiniteTransition` 之类的无限动画在应用退到后台后**仍在继续跑帧**。
+ * 本应用跑服务端时依赖常驻前台服务，界面长时间待在后台，这部分是纯粹的耗电。
+ * 把动画在后台钉成静态值即可（回到前台会自然恢复动画）。
+ */
+@Composable
+fun uiIsResumed(): Boolean {
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var resumed by remember(owner) {
+        mutableStateOf(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> resumed = true
+                Lifecycle.Event.ON_PAUSE -> resumed = false
+                else -> Unit
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    return resumed
+}
+
+/** 按当前主题渲染背景 */
+@Composable
+fun ThemeBackdrop(modifier: Modifier = Modifier) {
+    when (LocalAppTheme.current) {
+        AppThemeMode.M3 -> ClearBackdrop(modifier)
+        AppThemeMode.GLASS -> GlassBackdrop(modifier)
+        // SHELL 下不会走到这里：那是另一个 Activity（ShellActivity），整棵树都由手写
+        // View 构建，Compose 的背板根本不存在。分支留着只为 when 穷尽 ——
+        // 万一将来有人把 SHELL 接进 Compose，回退到 M3 背板也比崩溃好。
+        AppThemeMode.SHELL -> ClearBackdrop(modifier)
+        // Miuix：HyperOS 的分组灰底是**纯色**，不是渐变
+        AppThemeMode.MIUIX -> MiuixBackdrop(modifier)
+    }
+}
+
+/**
+ * MIUIX（HyperOS）的背景层。
+ *
+ * HyperOS 的设置页底色是**一块纯色**：浅色 #F2F2F7（分组灰）、深色 #000（纯黑）。
+ * 原来这里复用了 M3 的 ClearBackdrop（#F7F9FC → #EEF1F7 的纵向渐变），
+ * 淡蓝渐变叠在灰白卡片上会让「白卡 vs 灰底」的对比变浑——HyperOS 的分组感
+ * 全靠这一个平面的色差，渐变把它抹掉了。
+ */
+@Composable
+private fun MiuixBackdrop(modifier: Modifier = Modifier) {
+    val dark = LocalDarkTheme.current
+    val amoled = LocalAmoledDark.current
+    val color = when {
+        amoled -> Color.Black
+        dark -> MiuixTheme.BackgroundDark
+        else -> MiuixTheme.BackgroundLight
+    }
+    Box(modifier.background(color))
+}
+
+/** CLEAR：轻微纵向渐变，保持克制；AMOLED 纯黑时全黑 */
+@Composable
+private fun ClearBackdrop(modifier: Modifier = Modifier) {
+    val dark = LocalDarkTheme.current
+    val amoled = LocalAmoledDark.current
+    val top = if (amoled) Color.Black else if (dark) Color(0xFF10131B) else Color(0xFFF7F9FC)
+    val bottom = if (amoled) Color.Black else if (dark) Color(0xFF0B0E14) else Color(0xFFEEF1F7)
+    Box(modifier.background(Brush.verticalGradient(listOf(top, bottom))))
+}
+
+/**
+ * GLASS 液态玻璃（纯色版）：渐变底 + 缓慢漂移的柔光斑。
+ * 深色模式：深空蓝底 + 收敛的霓虹光斑；浅色模式：雾蓝底 + 柔和光斑。
+ */
+@Composable
+private fun GlassBackdrop(modifier: Modifier = Modifier) {
+    val dark = LocalDarkTheme.current
+    val amoled = LocalAmoledDark.current
+    val still = reducedMotion()
+    val transition = rememberInfiniteTransition(label = "glass")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(30000, easing = LinearEasing), RepeatMode.Restart),
+        label = "glass-phase",
+    )
+    val p = if (still) 0.4f else phase
+
+    Canvas(modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val m = max(w, h)
+        val twoPi = (2 * PI).toFloat()
+
+        // AMOLED 纯黑：全黑底、无光斑（发光像素违背纯黑省电语义）
+        if (amoled) {
+            drawRect(Color.Black)
+            return@Canvas
+        }
+
+        // 底色
+        drawRect(
+            if (dark) {
+                Brush.verticalGradient(listOf(Color(0xFF060B19), Color(0xFF0B152B), Color(0xFF0A1224)))
+            } else {
+                Brush.verticalGradient(listOf(Color(0xFFE9F1FB), Color(0xFFBFD5F1), Color(0xFFDAE7F8)))
+            }
+        )
+
+        // 柔光斑：缓慢漂移（加法混合，像玻璃背后的漫射光源）
+        fun bloom(color: Color, alpha: Float, cx: Float, cy: Float, radius: Float) {
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(color.copy(alpha = alpha), Color.Transparent),
+                    center = Offset(cx, cy),
+                    radius = radius,
+                ),
+                size = size,
+                blendMode = BlendMode.Screen,
+            )
+        }
+        if (dark) {
+            // 深色：光斑收敛、留出大面积深底（玻璃在深底上透光才明显）
+            bloom(Color(0xFF4C7DFF), 0.38f, w * (0.20f + 0.20f * sin(twoPi * p)), h * (0.26f + 0.12f * sin(twoPi * p * 1.2f + 1.2f)), m * 0.72f)
+            bloom(Color(0xFF9C6BFF), 0.28f, w * (0.68f + 0.16f * sin(twoPi * p * 0.8f + 2.4f)), h * (0.55f + 0.14f * sin(twoPi * p * 1.1f + 0.5f)), m * 0.62f)
+            bloom(Color(0xFF2FD4E0), 0.22f, w * (0.42f + 0.22f * sin(twoPi * p * 1.3f + 4.1f)), h * (0.74f + 0.10f * sin(twoPi * p * 0.9f + 5.0f)), m * 0.55f)
+            bloom(Color.White, 0.16f, w * 0.16f, h * 0.10f, m * 0.38f)
+        } else {
+            // 浅色：雾蓝底 + 柔光斑
+            bloom(Color(0xFF7FADFF), 0.85f, w * (0.20f + 0.20f * sin(twoPi * p)), h * (0.26f + 0.12f * sin(twoPi * p * 1.2f + 1.2f)), m * 0.95f)
+            bloom(Color.White, 0.80f, w * (0.68f + 0.16f * sin(twoPi * p * 0.8f + 2.4f)), h * (0.55f + 0.14f * sin(twoPi * p * 1.1f + 0.5f)), m * 0.85f)
+            bloom(Color(0xFFFFB2DE), 0.60f, w * (0.44f + 0.22f * sin(twoPi * p * 1.3f + 4.1f)), h * (0.75f + 0.12f * sin(twoPi * p * 0.9f + 5.0f)), m * 0.75f)
+            bloom(Color.White, 0.90f, w * 0.16f, h * 0.10f, m * 0.45f)
+        }
+    }
+}

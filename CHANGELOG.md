@@ -1,0 +1,1866 @@
+# Changelog — Kaze SLauncher
+
+> 遵循 [Keep a Changelog](https://keepachangelog.com/) 格式。
+> 仓库：github.com/0Sakura721/Kaze-SLauncher · GPL-3.0
+
+---
+
+## [0.11.1] - 2026-11-09
+
+### Fixed
+
+- **樱花映射登录后报 `Unexpected 'null' value instead of string literal at $[0].status_reason`**
+  樱花 `/v4/tunnels` 的响应里 `status_reason` / `note` / `extra` / `remote` / `local_ip`
+  等字段会直接返回 `null`，而数据类把它们声明成非空 `String`（带默认值）。
+  kotlinx 默认**不会**把显式 null 当作"用默认值"，于是解析抛异常，界面显示成
+  "密钥识别不了"——其实账号信息已经取到了。
+  现在解析器开启 `coerceInputValues = true`，并额外加了一层逐字段宽松解析兜底：
+  字段为 null、或类型漂移（例如 `online` 变成字符串 `"true"`）都只影响该字段，
+  不会再让整个登录/隧道列表失败。补了两个回归测试（null 字段 / 类型漂移）。
+  版本 0.11.0 → **0.11.1**（versionCode 36）。
+
+### Docs / Packaging
+
+- 赞助二维码更新为最新支付宝码（`docs/images/alipay.jpg`，替换旧的 `alipay.png`），README 赞助区注明"收款人洋洋，谨防仿冒"。
+- 新增 `dist/`：放入**已签名**的 arm64 安装包、`SHA256SUMS.txt` 与安装说明，并在 `.gitignore` 里为 `dist/*.apk` 开例外 —— 克隆仓库即可直接安装，不必自己构建。
+
+---
+## [0.11.0] - 2026-11-09
+
+### Added
+
+- **资源中心内容源：官方 + 镜像，自动回退**
+  以前写死 `api.modrinth.com`，网络不通就是"没有可用条目"。现在内置
+  **官方 Modrinth** 与 **MCIM 国内镜像**（`mod.mcimirror.top/modrinth/v2`），
+  默认「自动」：官方优先，失败自动切镜像；也可在资源中心右上角锁定某个源或填自定义 v2 地址。
+  推荐列表过滤后为空时**退回全量**（宁可显示"可能不兼容"，也不让整页空着）。
+- **客户端专用模组检测（可多选停用）**
+  模组页新增「客户端专用模组检测」：按 `fabric.mod.json` 的 `environment=client`、
+  已知客户端模组名单、Modrinth 的 `server_side=unsupported` 三条证据判定，
+  列出结果并默认勾选；支持「停用所选」与「全部停用」，只改名 `.disabled` 不删文件。
+- **崩溃自动重启的界面开关**
+  重启逻辑本来就在 `DefaultServerManager`（连续次数上限、成功启动清零），
+  但一直没有入口；现在在「实例详情 → 高级设置 → 崩溃后自动重启」可直接开关。
+- **公网与远程（新页面）**
+  主页「远程」进入，三条线路 + 一个远程面板：
+  - **Tailscale**：检测是否安装/是否拿到 100.x 地址，一键打开客户端，复制"朋友连接地址"；
+  - **樱花映射（SakuraFrp）**：应用内用**访问密钥**登录（API 只支持 Bearer 密钥，没有密码登录），
+    列出账号下隧道、选择后一键启动；frpc 配置由 `POST /v4/tunnel/config` 直接生成，
+    使用樱花官方分发的 `linux_arm64` frpc（约 20 MB，校验 md5）；
+  - **自建 frp**：填 frps 地址/端口/令牌/远程端口，应用生成 TOML 并启动同款 frpc；
+  - **远程管理**：复用「客户端同步」的 HTTP 服务，新增
+    `/api/status`、`/api/logs?n=`、`/api/command?cmd=`、`/api/start`、`/api/stop`（均需令牌），
+    把端口经 Tailscale/frp 暴露即可在浏览器远程看状态/日志、发命令、启停服务端；
+  - **远程串流说明**：Sunshine / foundation-sunshine 是 x86_64 桌面串流服务端（需 GPU 编码），
+    无法在手机 ARM 上运行；页面内给出 PC + Moonlight + 同一 Tailscale 的可行方案与链接。
+  - frpc 运行在 proot 的 `/root/kaze-net/` 下，不需要 root / Termux。
+- 版本 0.10.0 → **0.11.0**（versionCode 35）。
+
+---
+## [0.10.0] - 2026-11-09
+
+### Added
+
+- **模组列表显示真实图标**
+  新增 `core/addons/ModMetadata`（读 `fabric.mod.json` / `quilt.mod.json` /
+  `META-INF/mods.toml` / `META-INF/neoforge.mods.toml` / `mcmod.info`）与
+  `ModIconCache`（把 jar 内嵌的 `assets/<id>/icon.png`、根目录 `logo.png` 抽到缓存目录）。
+  列表行显示图标，并顺带显示版本、加载器、大小；点开行能看到模组 id、作者、依赖、
+  适配的 MC 范围与兼容性提示。Modrinth 搜索结果也显示上游 project icon。
+  - 元数据按 (路径, 大小, 修改时间) 缓存：滚动/开关重组不会反复解压 jar。
+  - 图标只在后台线程解码一次（长边 ≤ 256px），内存 LRU + 磁盘缓存两层，避免列表发涩。
+
+- **离线控制台（服务端不启动也能用）**
+  控制台输入框在停止态不再禁用，而是切到 `core/console/OfflineConsole`：
+  `help` / `info` / `ls` / `cat` / `grep` / `props`（读写 server.properties）/
+  `mods`（list、info、enable、disable）/ `wl`（白名单增删查清）/ `eula` / `jar`，
+  以及 `sh <命令>` —— 落进 proot 环境执行任意 Linux 命令（`sh du -sh world`）。
+  - 所有路径都做实例目录沙箱（`../` 与跳出目录的绝对路径直接拒绝）。
+  - 输出统一截断（200 行 / 单行 500 字符），`cat` 有 2 MB 上限与二进制检测。
+
+- **本地导入模组 / 插件**
+  `core/addons/AddonImporter` + 模组页「本地导入」：SAF 多选 jar，或直接选
+  `.zip` / `.mrpack` 整合包（自动展开 `mods/` 与 `overrides/mods/`）。
+  - 校验 ZIP 魔数、1 GB 大小上限，先写 `.part` 再原子换入；
+  - 内容相同（sha1）的副本自动跳过；同名不同内容默认**不覆盖**，
+    在结果面板里列出冲突，用户点「覆盖并重新导入」才替换；
+  - 导入时给出加载器 / MC 版本不匹配的警告（只提示，不阻止）。
+
+- **客户端模组同步：服务端把模组直接发给玩家**
+  `core/sync/ClientPack` + `core/sync/ModSyncServer`：
+  - 模组页「客户端同步」开启后，手机上起一个带访问令牌的 HTTP 服务，
+    暴露 `/mods.txt`（sha1 清单）、`/manifest.json`、`/mod/<文件名>`、`/client-pack.zip`；
+  - 生成 `client-pack.zip`（jar + 清单 + `kaze-sync.sh` / `kaze-sync.ps1`）
+    与 `.mrpack`（Modrinth App / Prism / HMCL 可直接导入）；
+  - 同步脚本按 sha1 比对，只下载新增/变化的模组，服务端换模组后重跑一次即可；
+  - 只打包**启用中**的模组；令牌比较走常量时间，路径穿越在清单里没有落点。
+  - 端口/令牌在模组页可直接改（`SettingsPrefs.modSyncPort` / `modSyncToken`）。
+
+### 内容中心（0.10）
+
+- **资源中心（新页面）**：主页「资源」入口进入，四个分区 —— **模组 / 插件 / 资源包 / 地图 / 基岩版**。
+  - 搜索走 Modrinth 通用接口（`/v2/search`，按 project_type + 加载器 + MC 版本过滤），结果与推荐都带**项目图标**、下载量、简介；
+  - 排序可切「相关度 / 下载最多 / 最新发布」，与附加管理页共用同一套安装管线（含同名替换与来源台账）。
+- **未下载也带图标的推荐列表**：模组页与资源中心都有「推荐」区，数据来自 `/v2/projects` 批量接口 + 本地精选表（Sodium/Lithium/Iris/JEI、EssentialsX/LuckPerms/WorldGuard、Faithful 等），按实例的加载器与 MC 版本过滤，每条带一句"为什么推荐它"，可展开/收起。
+- **资源包下载 + 服务器下发**：资源包装进 `<实例>/resourcepacks/`，并可一键写 `server.properties` 的 `resource-pack` / `resource-pack-sha1`（用上游 CDN 地址下发，玩家进服自动提示下载）。
+- **地图（世界存档）下载/导入/切换**：列出实例里的世界（读 `level.dat` 的 LevelName/Version/LastPlayed + `icon.png` 图标），支持导入 zip（自动定位 `level.dat` 所在层）、从 https 直链下载、切换当前世界（**旧世界自动备份**为 `world-backup-时间`）、删除非当前世界。
+- **基岩版服务端（PowerNukkitX）**：官方 BDS 只有 x86_64，ARM 手机跑不了；改为下载 PowerNukkitX（Java 实现）并一键创建基岩版实例（`bedrock = true`，默认端口 19132），版本信息取自 GitHub Releases。
+- **基岩版附加包（带图标）**：支持 `.mcpack` / `.mcaddon` 导入，按 `manifest.json` 的 modules 分辨资源包/行为包，图标读包内 `pack_icon.png`；启用状态写进当前世界的 `world_resource_packs.json` / `world_behavior_packs.json`（只解压不写 JSON 等于没启用）。
+- **服务器常用指令面板（可收起）**：控制台新增「常用指令」一行，展开后按 玩家与权限 / 时间与天气 / 世界设置 / 游戏规则 / 服务器维护 五组折叠，共 40 条常用命令，点一下即发送（`say` 只填入输入框），停止态整块禁用。
+
+### Changed（0.10）
+
+- 版本号 0.9.0 → 0.10.0（versionCode 34）。
+- 基岩版实例在「附加管理」页不再显示 Java 版模组/插件入口，改为提示去「资源中心 → 基岩版」管理附加包。
+---
+
+## [0.9.0] - 2026-11-07
+
+### Fixed
+
+- **备份期间取消会让服务端永久停止自动存盘（数据丢失）**
+  `InstanceDetailScreen` 的「立即备份」在**运行中**备份时会先发 `save-off`、
+  `save-all flush`、`delay(1500)` 再打包，成功或失败都发 `save-on`。但 `save-off`
+  与 `delay` 位于 `try` 块**外面**，而 `backupScope` 是 `rememberCoroutineScope` ——
+  用户点完备份立刻按返回/切页就会取消。一旦取消落在 `delay` 上，
+  `CancellationException` 从 `try` 之前抛出，内层 `finally` 根本没进入，`save-on`
+  永不发送：服务端从此不再落盘，此时崩溃或被系统杀进程 = 上次 save 之后的**全部
+  进度丢失**，而且界面上完全看不出"自动保存被关了"（要重启服务端才恢复）。
+  现在 `save-off` → `flush` → `delay` → 备份 → `save-on` 整体包进
+  `withContext(NonCancellable)`，并单独 `catch (CancellationException)` 显示
+  「备份已取消」而不是把取消当成失败。
+
+- **导入 26.x 版服务端会被配成 Java 8，启动必崩**
+  `JarInspector.javaForMc` 的版本正则 `1\.\d+(?:\.\d+)?` **没锚定**，
+  `"26.1.1"` 会从偏移 3 匹配到子串 `"1.1"` → major=1/minor=1 → 落到 `else -> 8`。
+  同一个版本号在创建路径（`ServerInstance.infer`）得到的是 25，两处自相矛盾；
+  导入路径拿 8 去启动，直接 `UnsupportedClassVersionError`。
+  正则改为按数字边界锚定（`(?<!\d)…(?!\d)`），并补上 `24+` 新命名的分档。
+
+- **删了实例、重启后又回来；字段修改互相覆盖**
+  `InstanceStore` 的 6 个 setter（`setMemory`/`setNogui`/`setExtraJvmArgs`/
+  `setPinned`/`setJavaMajor`/`setAutoBackup`）**既无 `@Synchronized`、又用
+  `_instances.value = …` 读-改-写**，而 `add`/`remove`/`rename` 三者都有锁。
+  两条真实后果：① 用户删实例（已落盘）后，详情页残留组合里的一次 `setNogui`
+  仍拿着"含已删实例"的旧快照写回并 `save()` —— 已删实例被重新写进 JSON；
+  ② 两个 setter 并发时后写覆盖前写。现在全部 `@Synchronized` + `update{}`。
+
+- **删实例的目录删不掉却一声不吭**
+  `runCatching { dir.deleteRecursively() }` 把失败全吞了。而 `InstanceStore.load()`
+  的 `recoverFromDirs()` 会扫到残留目录里的核心 jar，把实例**原地复活**。
+  SD 卡/FUSE 上这很常见（日志文件仍被句柄持有、只读挂载）。现在删不掉会提示
+  「实例已从列表移除，但目录未能删除，重启后可能被重新识别」。
+
+- **装 Java 卡在"解压 OpenJDK…"（进程永久 pipe_wait）**
+  `RootfsJavaManager` 调系统 `tar` 时既没 `redirectErrorStream`，也没有任何线程
+  读 `errorStream`。JDK 包里必然有大量 `Cannot create symlink` / `Permission denied`，
+  stderr 的 64KB 管道写满后 tar 阻塞在 `write()` 永不退出 —— 而 `waitFor(500ms)`
+  轮询永远拿不到退出码。同仓 `ProotEnvironment` 对**同一条 tar 命令**早已专门写了
+  sink 线程并留了"不消费则进程永久卡死"的注释，这条路径漏了。现在合并流 + sink 线程。
+
+- **并发部署会互相踩掉 rootfs（锁被放错）**
+  `ProotEnvironment.setup` 里没抢到锁的等待路径，用 `reachedTail` 判断是否释放标志，
+  而两个分支都反了：真正持锁时被取消反而不释放（锁永久为 true，之后每次部署白等
+  15 分钟）；**没持锁时**却在 `finally` 执行 `isSetupRunning.set(false)` ——
+  把别人持有的锁放掉，第三次 `setup()` 立刻能 CAS 成功，两套部署同时往同一个
+  `rootfsDir` 解压/apt，彼此删掉对方的目录。改为显式 `ownsLock` + `enteringTail`。
+
+- **进程退出收尾可能跑两遍（双启动 / 重复打包大世界）**
+  `handleExit` 的 `if (slot.exitHandled) return; slot.exitHandled = true` 是
+  check-then-act，而盯同一个进程的有两条线程（`waitJob` 与 init 的每秒巡检），
+  几乎同时触发时都会通过闸门。改为 `AtomicBoolean.compareAndSet`。
+
+- **三处"写盘失败却报成功"**
+  - 备份导出：`openOutputStream` 返回 null（SAF 授权失效、目标卷卸载）时老写法
+    `?.use{}` 直接跳过写入且不抛异常，却继续报「已导出」+ 成功色；拔卡后才发现没文件。
+  - 控制台导出：同一模式，用户以为存了，打开是空文件。
+  - 换背景图：`compress()` 返回 false / IO 失败被 `runCatching` 吞掉后仍置
+    `bgExists = true` + 版本号自增 → 重新解码拿到旧图/空图，唯一提示路径走不到。
+  三处都改为显式判失败并抛给调用方。
+
+- **插件目录读不出来却报"全部已是最新"**
+  `checkAddonUpdate` 里 `runCatching { installed(...) }.getOrDefault(emptyList())`
+  让"目录不可读"和"确实一个没装"走同一条分支，UI 显示 Done。现在读取失败
+  单独成 `Failed`。
+
+- **26.x 的 `instances.json` 手改后"重新扫描"直接闪退**
+  `InstanceStore.load()` 里的 `m.groupValues[1].toInt()` 无兜底，
+  一个手改的 `"mcVersion": "99999999999.1"` 就会 `NumberFormatException`，
+  而调用链上游是 UI 入口且没有 try/catch。改为 `toIntOrNull()`。
+
+- **新建服务端首帧在组合期做磁盘读（慢卡 ANR）**
+  `freePort` 用 `remember(allInstances) { ServerProperties.findFreePort(...) }`，
+  而 `findFreePort` 内部对**每个实例**各做一次 `ServerProperties.load` ——
+  与紧邻其下、被特意挪到 IO 线程的 `usedPorts` 是同一批磁盘读。注释与代码自相矛盾。
+  改为基于已算好的 `usedPorts` 用 `produceState` 在 IO 上求值（并新增
+  `ServerProperties.DEFAULT_SERVER_PORT` 供界面取初值）。
+
+- **路径穿越防线在 Windows 上静默失效（安全）**
+  `ModpackImporter.resolveRemoteDest` 用 `runCatching { canonicalPath }.getOrDefault(false)`
+  判断"是否落在实例目录内"。而 `C:/Windows/system32/x.dll` 这类盘符形状的路径会让
+  `getCanonicalPath()` **抛 IOException**，异常被吞成 `false`，于是同一个整合包清单
+  在真机（Android，冒号合法、会生成名叫 `C:` 的畸形目录）与开发机/CI（Windows，直接
+  判定失败）行为不一致。现在把 Windows/Android 双方都不接受的字符（`< > : " | ? *`
+  与控制字符）、段尾空格与点、以及 Windows 保留设备名（`NUL` / `COM1` …）统一规整，
+  不再依赖"抛异常恰好被吞"这种隐式行为；`.` 段按常规丢弃（`./mods/x.jar` 仍可用），
+  `..` 段继续整条拒绝。新增 3 条测试覆盖盘符、保留名与点段。
+
+- **玩家离开名单仍是读-改-写**：`_onlinePlayers.value = _onlinePlayers.value - name`
+  与上面"加入"侧的 `update{}` 不一致，并发时后写覆盖前写，名单少/多人且只有
+  `list` 命令能纠回来。改为 `update { it - name }`。
+
+- **切换界面语言后界面不刷新**（v0.9.0 体检）
+  `LanguageState.revision` 是 `@Volatile var Int`，Compose 观察不到 —— 而且全仓
+  **没有任何地方读它**（注释写着「见 AppRoot 的用法」，那机制并不存在）。于是
+  `setAppLanguage` + `apply` 之后一张像素都不变：点 English 没反应，退出重进才生效。
+  `Dest` 枚举更糟：label 在**类初始化时**就 `t()` 求值了（静态单例只算一次），即便
+  界面重组，底栏「主页/服务端/控制台/设置」也永远是启动时那一套。改为 `mutableStateOf`
+  + AppRoot 订阅；枚举只存中文原文，`val label get() = t(...)`。
+
+- **自动重启次数提前用完（本该恢复的崩溃变成彻底停服）**（v0.9.0 体检）
+  `launchServer` 重置了 `exitHandled` / `stopTimeoutJob` / `launchedAtMs`，唯独漏了
+  `restartCount`；而它只在 `finalizeStop` 归零，自动重启路径用 `putIfAbsent` 复用
+  槽位、从不经过那里。崩溃 → 重启成功(count=1) → 稳定跑几小时 → 再崩溃时计数仍在累加，
+  反复几次后 `maxRestarts` 用完。
+
+- **精确输入内存被静默取整**（v0.9.0 体检）
+  `MemoryLimits.clamp()` 向下对齐 256MB，实例详情的「精确输入」直接 `clamp(typed)`：
+  用户输 700 实际存 512（少 188MB），界面只有一行小字「每 256MB 一档」。而创建向导
+  那处用的是 `coerceIn`（不取整），两处行为不一致。现在越界就地报错不关框，并实时
+  提示「会按 256MB 对齐为 N MB」。
+
+- **实例目录可越界到所选卷之外**（v0.9.0 体检）
+  `StorageDirUtil.treeUriToFile` 没拦 `..` 段：`primary:../etc` 按字符串拼出
+  `/storage/emulated/0/../etc`，规范化后是 `/storage/emulated/etc` —— **跑出所选卷**。
+  `File.absolutePath` 不归一化，后面那句 `contains("/android/data")` 也拦不住。
+  `LanIp.rank()` 同时清掉一个穷举证明不可达的 `else -> 3` 死分支。
+
+### Fixed（上一轮 Miuix 改造自身的 4 处缺陷）
+
+- `M3ESegmentedRow` 在 MIUIX 分支**忽略调用方传入的 `height`**（写死 32dp），
+  6 个调用点里传 38/44dp 的弹窗会被静默压矮 12dp、与旁边控件基线错位。
+  改为 `height: Dp? = null` + 函数体内解析主题默认值。
+- `M3EListItem` 在 MIUIX 下只把 `graphicsLayer` 的 scale 覆盖成 1f，
+  `animateFloatAsState` 仍在每次按下时跑弹簧 —— 白算一帧。`targetValue` 一并改。
+- `SettingNote` 的 `top = if (isMiuix) 0.dp else 0.dp` 两支恒等，删掉。
+- `NewAgeTheme` 每次重组都重建 `Typography`，`MiuixTheme.Provide` 每次重建
+  `Colors`（50+ 个 Color）。两者都没实现 `equals`，身份不等即视为"值变了"，
+  于是每次重组都让所有读 `LocalTypography`/`LocalColors` 的节点失效（MIUIX 下
+  等于全屏重排）。改为 `remember(mode)` / `remember(dark, pureBlack)`。
+
+### Added
+
+- **`.github/workflows/verify.yml`**：手动触发的完整验证（`workflow_dispatch`
+  可选 scope：`compile` / `test` / `lint` / `full`），编译 + 全量单测 + 截图 + lint
+  在同一份 checkout 里顺序跑。只保留手动触发，避免与 `ci.yml` 在 push/PR 时重复消耗配额。
+
+---
+
+
+  `ModpackImporter.resolveRemoteDest` 用 `runCatching { canonicalPath }.getOrDefault(false)`
+  判断"是否落在实例目录内"。而 `C:/Windows/system32/x.dll` 这类盘符形状的路径会让
+  `getCanonicalPath()` **抛 IOException**，异常被吞成 `false`，于是同一个整合包清单
+  在真机（Android，冒号合法、会生成名叫 `C:` 的畸形目录）与开发机/CI（Windows，直接
+  判定失败）行为不一致。现在把 Windows/Android 双方都不接受的字符（`< > : " | ? *`
+  与控制字符）、段尾空格与点、以及 Windows 保留设备名（`NUL` / `COM1` …）统一规整，
+  不再依赖"抛异常恰好被吞"这种隐式行为；`.` 段按常规丢弃（`./mods/x.jar` 仍可用），
+  `..` 段继续整条拒绝。新增 3 条测试覆盖盘符、保留名与点段。
+
+- **备份状态用字符串前缀判断成功/失败（会给出错误的成功提示）**
+  `InstanceDetailTabs` 里写的是 `color = if (it.startsWith(t("已"))) primary else error`。
+  而英文表把 `"已"` 映射成**空串**，`startsWith("")` 恒为 true —— 于是英文环境下
+  「导入失败：…」「恢复失败：…」「备份失败：…」**全部显示成成功色**。中文下也只在
+  消息以"已"开头时才成立，换成「备份完成」这类措辞就翻车。
+  现在 `WorldTab` 增加显式 `messageOk: Boolean?`（true 成功 / false 失败 /
+  null 中性提醒用次要色），由调用方在每个 try/catch 分支里给出，不再靠文本形状猜。
+
+- **`t("已")` 空译文条目**：key 命中却返回空串（空串非 null，不会回退中文），
+  已随上一并删除。
+
+- **lint 质量门长期失效（如今恢复为 CI 门禁）**
+  Compose 的 lint detector 组与 Kotlin 2.1 的分析 API 二进制不兼容，在分析任意
+  Kotlin 文件时抛 `IncompatibleClassChangeError`（FrequentlyChangingValue /
+  RememberInComposition / AutoboxingStateCreation）或
+  `InvalidFirElementTypeException`（K2 UAST 桥接层），让**整个 lint 任务**失败。
+  由于它一直崩，没有任何一条 lint 检查真正跑过。
+  修法：`gradle.properties` 设 `android.lint.useK2Uast=false` 让 lint 走 K1 分析；
+  把确实崩溃/误报的少数 detector 连理由一起集中到 `app/lint.xml`（原先散在
+  `build.gradle.kts` 里）；`ci.yml` 新增独立 `lint` job。
+  恢复后立刻抓出并修掉 6 类真实问题：
+  - `ObsoleteSdkInt`：`AppLanguage` 里 `SDK_INT >= N` 恒真（minSdk 27），删掉死分支；
+  - `ApplySharedPref`：幂等清理不需要同步落盘，`commit()` 换成 `apply()`；
+  - `DrawAllocation`：`Atoms` 的 `onDraw` 每帧 `new Path()`，改为复用字段；
+  - `InlinedApi`：`FOREGROUND_SERVICE_TYPE_SPECIAL_USE` 是 API 34 常量，
+    显式按版本分支（低版本传 0 即"按清单走"）；
+  - `PrivateApi`：`ProotEnvironment` 自检反射读 `android.os.SELinux` 是刻意为之，
+    局部 `@SuppressLint` 并注明用途；
+  - `ProduceStateDoesNotAssignValue` 与 `RememberReturnType` 经逐条核对是
+    K1 detector 的误报（6 处都返回真实值），按误报记录在 `app/lint.xml` 里。
+
+### Changed
+
+- **Miuix（HyperOS）主题重做：从「换色」推进到「换版式」**
+  0.8.0 只做了两件事：把 M3 ColorScheme 换成 HyperOS 色、把开关本体换成 Miuix 的
+  Switch。屏幕骨架仍是 Material 3 Expressive 的，所以整个主题看起来像"套了一层皮"。
+  本次按 HyperOS 的真实令牌补齐了三块缺口：
+
+  - **Miuix 组件终于共享同一套颜色（真缺陷修复）**
+    此前从未提供 `MiuixTheme(colors = …)`，Miuix 的 Switch/Slider/Checkbox/Progress
+    读的都是库里**内置的浅色默认板**（primary #3482FF、未选中轨道 #E6E6E6）。后果是
+    **深色主题下开关仍是灰轨白钮贴在黑底上，几乎看不见**，滑块是一条浅灰条。
+    现在 `NewAgeTheme` 在 MIUIX 分支里提供一份 HyperOS 令牌
+    （`MiuixTheme.colorsLight()` / `colorsDark(pureBlack = …)`），并连带提供
+    `LocalIndication`（HyperOS 的矩形按压高亮，取代水波纹）。
+  - **背景层换成纯色**：MIUIX 不再复用 M3 的纵向渐变（#F7F9FC → #EEF1F7），
+    改为 HyperOS 的平面分组灰 #F2F2F7 / 深色纯黑。灰白渐变会把「白卡 vs 灰底」
+    的对比抹掉，而 HyperOS 的分层完全靠这一个色差。
+  - **列表改成 HyperOS 的分组卡**：`M3EConnectedList` 在 MIUIX 下画成
+    「一个 16dp 圆角白卡 + 行间 0.5dp 缩进分隔线」，不再是每行一张 28dp 大圆角小卡
+    （后者是 M3 Expressive 的相连列表语言，跟 HyperOS 的分组完全不同）。
+    行高从 72dp 收到 56dp（Miuix `BasicComponent` 的实测值），图标容器从 40dp 正圆
+    改成 32dp / 8dp 圆角的方块，按压反馈从水波纹换成矩形高亮。
+
+- **交互控件补全**：新增 `M3ESlider` / `M3ECheckbox` / `M3ELinearProgress` /
+  `M3EDivider` / `M3ECategoryChip`（`ui/components/MiuixComponents.kt`），MIUIX 下
+  分别落到 Miuix 的 Slider（30dp 高、细轨）、Checkbox（圆角方块 + 勾选弹簧）、
+  ProgressIndicator（6dp 条、单侧扫光），以及 HyperOS 的 0.5dp 细线与小圆角标签。
+  9 个屏幕里的 13 处 Switch、4 处 Slider、1 处 Checkbox、6 处进度条、
+  1 处分隔线、1 处分类条全部接上。
+
+- **版式标尺换成 HyperOS 的**：新增 `miuixTypography()`，MIUIX 下 M3 Typography
+  改用 HyperOS 的字号（正文 16/14/13/11、标题 20 SemiBold）。此前 MIUIX 仍用
+  M3 Expressive 的强调字阶（titleMedium 及以下 Bold、正文 17sp），结果
+  「Miuix 开关旁边的 M3 文字」比 Miuix 自带文字大一号、重一档，两套语言拼在一屏。
+  `GroupHeader` 在 MIUIX 下不再画卡，改为保留一个 0dp 高的位置锚点
+  （`onGloballyPositioned` 是顶部分类条 `sectionOffsets` 的唯一上报点，直接删掉
+  会让分类条的点击跳转与滚动高亮全部失效），分区标题改由**顶部分类条**表达
+  ——HyperOS 设置页本来就是这样，同一个「外观」不该在 chips 与卡片上方各出现一次。
+  顶部分类条在 MIUIX 下也从 Material 的全圆 `FilterChip` 换成 HyperOS 的小圆角标签
+  （`M3ECategoryChip`：30dp 高、8dp 圆角、选中浅蓝底）：8 个分区从「一屏 4 个半」
+  变成一屏全部可见。
+
+- **底栏**：MIUIX 下改为实心胶囊（56dp、白/深灰底、0.5dp 描边、浅投影），
+  选中项用一块 `primaryContainer` 浅蓝圆角底 + 对应前景色。原先是 50% 半透明底、
+  只有图标变色，前者会让卡片边线透过底栏，后者辨识度太低。
+
+- **shell（岚）层的操作反馈接入 i18n**：`toast` 里 12 处中文字面量此前直接拼接
+  （`"已删除 ${instance.name}"` 等），英文用户看到整句中文。统一改为
+  `t("已删除 %s", instance.name)` 形式，并补齐英文条目。
+- `AppViewModel` 两处版本/能力提示同样改为走 `t()`（含把「插件 / 模组」「空」
+  这类可变词拆成独立 `%s`，而不是拼进中文句子）。
+- 清掉英文表里 2 条**插值污染**的坏 key（转换脚本把 Kotlin `${...}` 模板塞进了 key，
+  与源码真实串永远对不上、等于没翻译），并补上对应正确 key。
+
+### Added
+
+- **`MiuixThemeTest`（组件级截图 + 不变量断言）**
+  此前 MIUIX 主题**一张截图都没有**，改动全靠"编译过了"验收。新测试同时给出：
+  - 截图：`miuix_components_{light,dark,amoled}`（开关/勾选框/滑块/分段/进度/卡片全套）；
+  - 断言：深色令牌必须是深底（防退回内置浅色板）、HyperOS 主色与 miuix 默认值确实
+    不同源、`miuixTypography()` 的四个字号、MIUIX 上下文里的 `StatusPalette` 与
+    `MiuixIndication` 确实生效。
+- **屏幕级 MIUIX 截图**：设置页（浅色 / 深色）、服务端列表（两个实例）、控制台（深色），
+  与既有 M3 截图对照。
+- **`.github/workflows/theme-ui.yml`**：主题与组件层的独立工作流（路径过滤，
+  只跑 `MiuixThemeTest` / `ExpressiveComponentsTest` / `ScreenshotTest`，3–5 分钟）。
+  重量级的全量截图与打包仍留在 `ci.yml` / `release.yml`，本地不跑。
+- **`ci.yml` 新增 `lint` job**：lint 恢复后作为门禁，并上传 `lint-report`；
+  测试失败时额外上传 `test-xml`，便于在 CI 里直接看。
+
+- `testOptions.unitTests.all` 透传 `roborazzi.test.record` / `.verify`：
+  Gradle 的 `-D` 只作用于守护进程，不转发的话 `testXxx -Droborazzi.test.record=true`
+  会**全部通过却一张 PNG 都不产出**——这条是主题 UI 工作流能独立跑的前提。
+
+---
+
+
+## [0.8.5] - 2026-11-07
+
+### Added
+
+- **快捷添加技能**（设置 → AI 设置 → 技能）
+  此前只能自己把 md 拷进 `<实例目录>/skills/<名字>/SKILL.md`，手机上既没有趁手的
+  markdown 编辑器，还要记住目录结构与 frontmatter 格式。现在有三个入口：
+  - **新建技能**：填名字、一句话描述、正文即可，frontmatter 由应用生成；
+  - **从文件导入**：系统文件选择器挑一个 `.md`。已有 frontmatter 的**原样保留**，
+    没有的自动补一个（用文件名与正文首行）；
+  - **删除**：每条技能右侧，弹确认后删掉整个 `skills/<名字>/` 目录。
+
+### Fixed
+
+- 技能写入的破坏性防护：
+  - **同名绝不覆盖** —— 已存在同名技能时直接报错。技能是手写文档，静默覆盖等于丢数据；
+  - **名字规整防越界** —— `../evil` 这类输入会变成普通目录名，
+    否则会写到 `skills/` 外面（例如覆盖 `server.properties`）；
+  - **删除前做 canonicalFile 校验**，解析后的父目录必须是 `skills/` 本身。
+
+### Notes
+
+- 技能正文上限 20000 字符：技能会被注入 AI 的提示词，超长会挤掉真正有用的现场信息。
+- 新建/导入的技能默认启用；之前禁用过的技能保持禁用。
+
+
+---
+
+## [0.8.4] - 2026-11-07
+
+### Changed
+
+- **界面语言默认改为「跟随系统」**（此前默认简体中文）
+  系统语言是中文就显示中文，否则显示英文。仍可在设置里强制中文或英文。
+
+### Fixed
+
+- 测试环境语言未固定导致断言中文文案的用例脆弱：`Application.onCreate` 会读取语言
+  偏好并应用，在 en-US 的 CI 环境下解析成英文，16 个断言中文原文的用例会失败。
+  现在测试侧固定 `zh-rCN`（`robolectric.properties` + 13 个带 `@Config(qualifiers)`
+  的测试各自补 locale —— 因为 `@Config` 会整体替换 properties 里的 qualifiers）。
+
+### Docs
+
+- 中文使用说明补「界面语言」小节（三档行为、默认跟随系统、译文覆盖 99.7%、
+  单行文本用省略号截断的原因）。
+- 英文指南的默认值说明同步改为跟随系统。
+
+
+---
+
+## [0.8.3] - 2026-11-07
+
+### Changed
+
+- **英文覆盖从 86% 提升到 99.7%**（1051 / 1054 条）
+  - **带插值的文案也翻译了**：183 处 `"字面 ${值} 字面"` 改写为
+    `t("字面 %s 字面", 值)`，方法调用与 Elvis 表达式完整保留为参数；
+  - 补 173 条此前遗漏的静态文案（含 `"  分享"` / `" 人"` 这类带前导空格的 key）；
+  - 英文表按源码**实际用到的 key** 重新生成，不再是"表里有但代码没引"的臃肿状态。
+
+### Fixed
+
+- **英文变长会导致文字被硬裁**：14 处单行文本补 `TextOverflow.Ellipsis`。
+  中文 4 个字的信息量英文常要 20+ 字符，不指定 overflow 会被切在容器边界、
+  留下半个单词；现在统一显示为 "Install a server…"。
+- 3 处字符串模板里嵌套 `if` 表达式的文案在批量改写中被截断导致编译失败
+  （`${if (x) "a" else ""}` 只认到第一个右括号）—— 已还原为原始形态并**不翻译**：
+  改写它们需要重构逻辑，风险高于收益，英文模式下这 3 处显示中文。
+
+### Notes
+
+- 以下两类**有意不译**：① AI 系统提示词（发给模型的，不是界面文案）；
+  ② 少数嵌入嵌套 Kotlin 表达式的字符串。未译处一律回退显示中文，
+  不会出现空白或原始 key。
+
+
+---
+
+## [0.8.2] - 2026-11-01
+
+### Added
+
+- **英文界面与语言切换**（设置 → 通用 → 界面语言）
+  - 三档：**跟随系统 / 简体中文 / English**，切换立即生效，不需要重启；
+  - 默认**简体中文** —— 中文是这套文案的原文、英文是翻译层，默认中文让首次安装的
+    观感与改动前完全一致，不会因为设备语言是英文就把界面变成英文；
+  - 「跟随系统」的副标题会显示实际解析结果（跟随系统 · 简体中文 / English），
+    而不是只给一个含糊的标签。
+  - 实现为**运行时字典**：中文原文即 key 查英文表（`core/i18n`），828 条文案中
+    715 条已译；查不到的**原样返回中文**，漏翻只会显示中文，不会出现空白或 key。
+  - 覆盖 31 个界面文件、1192 处文案。带插值、含换行的文案暂未自动改写。
+
+- **英文文档**：新增 [docs/User-Guide.md](docs/User-Guide.md)，与中文版
+  [docs/使用说明.md](docs/使用说明.md) 内容对齐（安装、向导、启停、控制台、玩家管理、
+  实例详情、插件更新、诊断、备份、设置、AI、MCP、限制与 FAQ）。两份文档顶部与 README
+  均已加语言互链。
+
+### Fixed
+
+- 「关于与许可证」正文此前是 `const val` 且**没有任何引用**（合规正文实际没显示）：
+  改为 `aboutLicenseText()` 函数（文案要经 t() 查表，不能是编译期常量），
+  并在 AboutDialog 中真正显示。
+
+
+---
+
+## [0.8.1] - 2026-11-01
+
+### Added
+
+- **核心更新**（实例详情 → 运行 → 「核心版本」卡片）
+  已建实例可以检查服务端核心有没有新版本，并一键下载替换。
+  - **Paper / Fabric**：比对构建号 / loader 版本（有完整版本列表，最准）；
+  - **Purpur / Spigot / 原版 / Forge / NeoForge**：比对下载地址（地址带版本号，变了就是新包）；
+  - **自己导入的 jar**：不支持 —— 没有上游可对比，界面直接说明。
+  - 升级前必须停服（运行中进程占着旧 jar，换完跑的还是旧代码）；旧 jar 先改名 `.old` 备份，
+    新包下完并通过 SHA-1 校验才删备份，中断自动还原。
+  - Forge / NeoForge **不自动替换**：新版要重跑安装器生成依赖库，直接换会让实例变「半装」。
+  - `ServerInstance` 新增 `coreBuild` / `coreDownloadUrl`（带默认值，旧存档读出为「未知」，
+    不影响已有实例）。
+
+- **插件 / 模组更新**（附加 → 「已安装」右侧「检查更新」）
+  - 新增来源台账 `plugins/.kaze-addons.json`（模组在 `mods/`）：记文件名 → 项目 / 版本 /
+    loader / MC 版本。
+  - **老版本装的插件也能识别**：台账里没有的，用文件 SHA-512 去 Modrinth
+    `/version_file/{hash}` 反查，成功则补写台账 —— 不需要重装。
+  - 结果分四段：可更新（带版本对照 + 一键全部更新）/ 已是最新 / 认不出来源 /
+    上游无兼容版本。
+  - 升级逐个串行下载（并发会被 Modrinth 限流），失败不中断并一起汇报；上游改过文件名时
+    删掉旧文件，避免服务端同时加载两份。
+  - 判定不会把**降级**当成更新；认不出来源时如实说明，不谎报「已是最新」。
+
+### Fixed
+
+- 核心 / 插件的更新提示里，若上游把当前版本从列表里删了，按「取最新」处理并在文案里说明，
+  而不是静默跳过（静默跳过会让用户以为上游没更新）。
+
+---
+
+## [0.8.0] - 2026-10-31
+
+### Added
+
+- **Miuix 主题**（设置 → 外观 → 主题样式，第 4 项）
+  与 Material 3 / 岚并列可选，切换立即生效、无需重启。
+  - HyperOS 观感：分组灰底 + 白卡片 + 大圆角 + HyperOS 蓝强调色，深色下纯黑底；
+  - 卡片换成「白卡 + 0.5dp 细描边 + 18dp 圆角、无投影」（HyperOS 靠底色对比而非海拔）；
+  - **开关本体换成 Miuix 的 Switch**（细长胶囊 + 白钮 + 蓝轨）—— 设置页 4 处行内开关
+    （显示背景 / 控制台 AI 入口 / MCP / 自动更新）都已接上；
+  - 状态色用 HyperOS 语义色（绿=在线、红=错误、黄=忙碌）。
+  - 实现说明：Miuix 自带的 MiuixTheme 与 Material3 的 CompositionLocal 不互通，整树替换会让
+    现有组件全部失色，所以取「**视觉令牌映射**」——把 Miuix 的配色语言翻译成 M3 ColorScheme，
+    现有组件零改动即获其观感；组件级差异（开关本体）按 `LocalAppTheme` 分支处理。
+  - 依赖 `top.yukonga.miuix.kmp:miuix-android:0.7.2`（Apache-2.0，已记 NOTICES）。
+    0.8+/0.9.x 要求 compileSdk 36/37，本项目 35，故取 0.7.2。
+
+### Changed
+
+- 设置页「主题样式」的选择器注释补上「液态玻璃为何不展示」的说明
+  （它是背景图+模糊的组合呈现，与「背景图」设置重复）。
+
+### Fixed
+
+- **`M3EListItem` 高亮对比度**：Miuix 分支高亮底色改成 primaryContainer（浅蓝）后，
+  前景仍是 onSecondaryContainer（灰），浅蓝底灰字发闷 —— 前景同步改 onPrimaryContainer。
+- **release lint 恢复**：此前为绕开「Lint 分析 miuix 字节码时自身崩溃
+  （IncompatibleClassChangeError in NonNullableMutableLiveDataDetector）」把
+  `checkReleaseBuilds` 整个关掉了 —— 等于用一道质量门换一个当时还没用上的依赖。
+  现改为只 `disable "NullSafeMutableLiveData"`，release 的其他检查全部生效。
+
+### Removed
+
+- **全部 BiliPai 引用（36 处）与源自它的死代码 shader**
+  本项目液态玻璃实际采用 Kyant0/AndroidLiquidGlass（Apache-2.0）的折射透镜 RuntimeShader
+  与 Miuix（Apache-2.0）的底栏版式；BiliPai 只是这两者的使用者，其代码未被复制。
+  来源标注改为直接指向真实上游（Kyant0 条目描述补全）。
+  另删除 `Modifier.liquidGlassEdgeRefractionSafe()` 与 `LIQUID_GLASS_EDGE_SHADER`
+  （40 行 AGSL）—— 全仓零调用，且注释声称源自 GPL 项目。
+
+## [0.7.2] - 2026-10-31
+
+本版是**全面审计**的结果：逐类扫描代码（委托误用、重复导入、空断言测试、StateFlow 读改写、
+SharedPreferences 漏 apply、空 catch、listFiles 空值、自建作用域、硬编码路径、死代码…），
+确认并修复 6 个真缺陷。只有 C 能写单测，其余靠代码层论证 + CI 全绿。
+
+### Fixed
+
+- **硬编码 JDK 目录名，导致 32 位设备服务端起不来**（最严重）
+  `DefaultServerManager` 的启动参数与 Forge 安装器都自己拼
+  `/usr/lib/jvm/java-<版本>-openjdk-<arch>/bin/java`，但 **JDK 的目录名并不统一**：
+  apt 装出来是 `java-1.17.0-openjdk-arm64`，Adoptium（应用自己下载解压）是
+  `java-17-openjdk-arm64`。`ProotEnvironment.getJavaPath()` 本来就按**实际检测到的目录名**
+  拼，两处启动路径却绕过了它 —— 于是 apt 装的 JDK 会拼出**不存在的路径**，表现为
+  「一启动就退出」而不是一句明确的错误。
+  32 位设备（`armeabi-v7a`）上 Adoptium 没有官方包、**必然走 apt**，所以这条路径是系统性失效；
+  arm64 上 Adoptium 下载失败回退 apt 时同样中招。已把 `getJavaPath` 提为
+  `LinuxEnvironment` 的接口方法，两处改为调用它（检测不到时仍退回传统命名）。
+- **导入收尾出错会删掉已登记的实例目录**（会丢数据）
+  `importJar` / `importModpack` 的 `catch` 里无条件删目录，而 `instanceStore.add()`
+  在它之前执行 —— 任何登记后抛出的异常都会把目录删掉、实例却留在列表里，用户得到一个
+  「点进去处处报错、数据已没了」的空壳且没有任何提示。已加标记，只清理本次新建的半成品目录。
+- **模组"大小一致就跳过"连哈希校验一起跳过**（静默损坏）
+  Modrinth 清单给了 sha512/sha1，但原实现只要文件长度与清单一致就直接复用 ——
+  长度恰好相同的损坏文件会被**永久**复用（每次导入都判"已下好了"，模组一直跑不起来）。
+  抽出 `canReuseExisting()`：**有哈希必须以哈希为准**，没哈希才退回比大小。
+- **实例被删后 AI 写入只回喂「失败：null」**
+  AUTO 档两条协议分支都写 `target!!.dir`，空值 NPE 没有 message 又被外层吞掉 ——
+  用户看到「自动写入失败：失败：null」，模型也只拿到同一句话，只会反复重试。
+  改为提前拦下并说明"当前没有可写入的实例"。
+- **服务端页导入状态的三处问题**（shell 界面）
+  终态（成功/失败）没有清回 Idle —— 这个屏是缓存的，每次重新进入都会**再弹一次** Toast、
+  失败横幅常挂不走（`clearImportJarProgress()` 定义了却从没被调用）；失败把标签染红后
+  不复位，之后「导入中/导入完成」也一直是红的；延迟清理还可能清掉期间新开始的导入。
+  已统一处理（清回 Idle 前用引用相等确认"还是那一个终态"）。
+- **导入整合包写死 2048MB 内存** —— 2GB 机型刚建好实例就可能 OOM。
+  改为与「新建」页同一套建议逻辑（可用内存一半、下限 1024），仅在可用 ≥4GB 时抬到 2048。
+
+### 明确检查过、确认无问题的
+
+委托误用（`val x by remember { f() }`）0 处、同文件重复 import 0 处、无断言的测试 0 处、
+StateFlow 读-改-写 0 处、SharedPreferences 改完漏 apply 0 处；8 处空 catch 全部带
+「刻意吞掉」说明；`listFiles()` 的 3 处都已做空值保护。玻璃主题相关设置项与
+`envExternal` 的"无人调用"是**有意保留**（前者见 `LIQUIDGLASS_BRANCH.md`，后者是兼容遗留项），
+未改动。
+
+## [0.7.1] - 2026-10-31
+
+处理 issue #15（"如果可以增加一些自定义就好了"）的反馈。
+
+### Added
+
+- **导入服务器整合包 zip**：服务端页新增「整合包」按钮，选一个 zip 即可建出实例。
+  处理链是「解压 → 摊平 → 识别 → 登记」：
+  - **安全解压**：外部 zip 按不可信输入对待 —— Zip Slip（`../` 逃逸）逐条目校验，
+    条目数 / 解压总量 / 单文件三项限额防 zip 炸弹；
+  - **摊平目录**：整合包常见「整包多一层壳」（`MyPack-1.20.1/`）与 CurseForge 的
+    `overrides/`，不摊平的话 `server.jar` 不在实例根目录、启动器找不到它；
+  - **识别启动方式**：有 `libraries/**/unix_args.txt` 走 Forge/NeoForge（MC 版本从
+    库目录名抽）、有可直接 `-jar` 的 jar 直接启动、**只有 mods 时拒绝建立实例并告诉用户
+    去补服务端核心**（建一个必然启动失败的实例只会让人以为是自己操作错了）；
+  - **Forge 库完整性校验**：解析 classpath 逐个查文件，**只有齐全才写安装标记** ——
+    标记写错会导致之后每次启动都跳过安装、永远修不回来。
+  - MC 版本认不出时**留空并提示**，不猜（版本错了会连带 Java 选错、备份命名也错）；
+    另可从 `mods/` 文件名兜底（要求多数 mod 指向同一版本才采信）。
+
+### Fixed
+
+- **IP 地址"不太好找"**（issue #15 反馈）：
+  - 取地址原来只看"第一个非回环地址" —— 手机同时开蜂窝数据/VPN 时可能拿到运营商地址
+    或 VPN 地址，给朋友**连不上**。现在按「最可能连得上」排序：私网段 + Wi-Fi/热点/
+    以太网接口优先，运营商与 VPN 排最后，并排除链路本地地址；
+  - 实例详情页原来把地址 `remember` 住了：进页面时没连 Wi-Fi 就永远取不到、之后连上
+    也补不出来（局域网那行压根不显示）。现在可**手动刷新**、进页面**自动补取**，
+    并新增**取不到时的明确说明**（原来整块藏掉，用户以为不支持局域网），
+    同时列出其它候选地址。
+- **单文件限额对"流式 zip"形同虚设**（新增测试抓到的真缺陷）：原来只看 `entry.size`
+  决定是否跳过超大文件，而流式读取时本地文件头里的 size 不可靠（常为 0 或 -1，
+  真实长度在数据描述符里）—— `ZipInputStream` 与 SAF 打开 zip 都是流式，所以这道
+  zip 炸弹防护在真实路径上等于没有。改为读取循环里边读边算。
+
+## [0.7.0] - 2026-10-31
+
+### Added
+
+- **「岚」界面（全新手写视图层）**：完全不用 Material 组件、不用 AndroidX UI，
+  所有界面由 `LinearLayout` / `FrameLayout` / 自绘 `Canvas` 在代码里搭出来。
+  - **四页签**：实例 / 服务端 / 控制台 / 设置。
+  - **服务端页**：分段筛选（全部 / 官方 / 性能 / 模组，带计数）、导入 jar（SAF，
+    含进度与失败提示）、批量启停（只作用于当前筛选结果，串行启动避免抢资源）、
+    置顶排序、行内「⋯」菜单（重启 / 改名 / 置顶 / 删除）。
+  - **控制台**：日志区按剩余高度撑满（不滚动骨架）、CPU / 内存分段计量条、
+    在线玩家、快捷命令、命令输入底栏（键盘弹出时自动让位）。
+  - **设置**：外观 / 当前实例 / 环境与诊断，含 Java 运行时管理（安装 / 卸载 /
+    刷新，读真实已装列表）、MCP 端口与令牌、自动检查更新。
+  - **自绘控件**：270° 刻度盘、开关、分段计量条、带亮边的进度条、自定义滑块、
+    渐变背板、文字页签导航。
+
+- **主题样式统一**：「岚」成为 `AppThemeMode` 的第三个成员，与 Material 3 并列在
+  同一个「主题样式」选择器里（不再单设「界面外壳」这一概念）。
+  - 两套配色：**素纸**（纸底 + 黛蓝强调 + 朱红危险）/ **墨夜**（深底 + 琥珀金），
+    共用同一组语义槽，切换主题不需要改任何一屏布局代码。
+  - 视觉基调：纸感中性底 + 1px 硬描边 + 极轻圆角，层级靠色阶而非阴影 ——
+    与玻璃拟态相反，追求边界清楚，低端机与深色下都稳。
+  - 旧档的 `ui_shell` 偏好会自动折算为 `theme_mode`，不会丢设置。
+
+### Changed
+
+- 启动入口改为 `ShellActivity`；原 Compose 界面保留为 `MainActivity`，
+  两者互相校验档位，从桌面图标 / 通知拉起时不会被带到另一套界面。
+- 实例卡片改为三行布局（名称 / 版本 / 状态），窄屏下三者都能完整显示。
+
+### Fixed
+
+- **退出闪退**：`ShellHost.stop()` 边遍历 job 列表边让回调回写，触发
+  `ConcurrentModificationException`。按返回键、切主题、系统回收都会踩到。
+- **转交路径崩溃**：主题属于 Compose 侧时 `ShellActivity` 提前 return，六个
+  `lateinit` 全空，而 `onDestroy` / `onBackPressed` 无条件访问 → 闪退。
+- **实例卡片内容丢失**：320dp 屏上状态胶囊无上界，把名称列挤到 10px，
+  名称折 3 行、副标题折 24 行。
+- **弹层标题被顶出屏幕**：`CappedScrollView` 丢弃父高度 spec，横屏 / 键盘弹出时
+  拖拽把手与关闭键跑到窗口外。
+- **弹层分隔线全不可见**：`Sheet.add()` 用 `WRAP_CONTENT` 覆盖了 splitter 的 1px 高度。
+- **刻度盘显示满环**：已停止的实例盘面显示成满载（动画目标写死 + 与 setter 抢写）。
+- **首次点击失效**：`clickOnce` 的节流初值为 0，设备刚启动时首次点击被当成连击丢弃。
+- **底部导航未居中**：父容器的横向 gravity 传不到子 View，页签整体贴左。
+- **设置页不刷新**：停在设置页时启停 / 改名 / 改内存都不更新（回调是死代码）。
+- **多处协程泄漏**：屏切走时不 detach、自建 scope 永不取消、七个回调持有 Activity。
+
+---
+
+## [0.6.0] - 2026-10-30
+
+> 合并说明：0.5.4 与 0.5.5 两个版本的 GitHub Release 已由维护者删除（未对外发布），
+> 其变更内容并入本版。
+
+### Added
+
+- **可选 Java 版本**：
+  - **创建实例时可选**：配置页 Java 那节从「只读自动推断」改成 自动 / 8 / 17 / 21 / 25，
+    默认仍是自动（与旧版一致，不关心的人什么都不用做）；手选版本低于推荐值时红字提示。
+  - **已创建实例可改**：实例详情 → 高级设置加 Java 分段选择，与 JVM 参数 / nogui 一起保存；
+    运行中保存会提示「重启后生效」，并在控制台留一行说明。
+    同一台设备可能装了多个 Java，也有整合包明确要求特定版本，所以给选择权。
+
+- **导入进度可见**：导入 `server.jar` 时服务端页显示进度条与已复制大小。SAF 给不出总大小时
+  退化成不确定进度条（显示「复制中… 12 MB」），不会是一个永远 0% 的死条。
+
+- **技能（skills）**：把 `SKILL.md` 放进实例目录的 `skills/<名字>/`，AI 就会知道它、需要时自己读取。
+  系统提示里只放**清单**（名字 / 一句话描述 / 文件路径），正文由模型按需读取 —— 不新增工具，
+  读文件仍受既有权限策略与敏感文件确认约束，也不会让几个技能把上下文占满。
+  设置页新增「技能」分区：可刷新列表、逐个开关（新拷进来的默认启用）。
+  目录约定与 Claude / DSH 的 `SKILL.md` 一致，可直接把别处的技能目录拷进来。
+
+### Changed
+
+- **导入 `server.jar` 全面优化**：
+  - **复制前先体检**：选错文件（插件 jar、世界 zip、随便一个文档）会**立刻**被拒绝并说明原因，
+    不再「导入成功、启动才炸」。判断依据按可靠度排序（jar 内 `version.json` →
+    `META-INF/download-context` → MANIFEST → 类路径特征）。
+  - **智能命名**：实例名不再是「导入-1006-1530」，改用识别到的「Paper 1.21.4」这类，
+    重名自动加序号。
+  - **自动填好核心类型与 MC 版本**：插件版本匹配、备份命名、界面提示都能用上。
+  - **Java 版本按 MC 版本推断**：paperclip / bundler 这类 jar 本身只是启动器（常用
+    Java 17 编），真正跑的服务端才决定版本 —— 只看包内 class 版本会把 1.21.4 的 Paper
+    判成 Java 17，启动时 `UnsupportedClassVersionError`。
+  - **失败说清原因**：保留「空间不足」「SAF 授权失效」这类可读信息，不再是「未知错误」。
+  - 文件选择器的 MIME 不再直接给 `*/*`。
+- **部署日志的 O(N²) 去掉**：`ProotEnvironment` 里 9 处 `_log.value = _log.value + msg`
+  每次追加都拷贝整个列表，而部署要打几百上千行（解压 tar 每行、自检每行），
+  整体退化到 O(N²)。改成原子追加 + 保留最近 2000 行，自检几十行改成一次批量提交。
+
+- 三个过大的 Compose 屏幕文件拆分（纯搬运，调用点零改动）：
+  `NewServerScreen` 1331 → 153 行、`InstanceDetailScreen` 1742 → 440 行、`SettingsScreen` 1871 → 1182 行
+- UI 默认不再出现「联网」开关（随联网搜索一并移除）
+
+### Fixed
+
+- **两处非原子读-改-写**（并发时会丢数据）：
+  - `InstanceStore.add`：下载与导入同时完成会互相覆盖，丢掉其中一个实例；
+  - 在线玩家名单：控制台行是并发喂进来的，两人几乎同时进服会丢掉一个。
+- **换行符治理**：新增 `.gitattributes`（`* text=auto eol=lf`）。此前 Windows 上写文件
+  会把 LF 变成 CRLF，git 把整个文件记成改动（一次出现 3491 行假 diff）。
+
+- **AI 工具循环补上端到端测试**（此前零测试，因为它需要 Android 运行时）：
+  新增 34 个用例，覆盖工具权限三档在两种协议下是否真的生效、写入确认的挂起/批准/拒绝/重复点击、
+  协议回喂配对、命令三档闸门。为此新增 `AiChatHost` 假宿主管线。
+- **`write_file` 的「自动」档此前完全无效**：两条协议分支都无条件挂起确认，
+  从未读 AUTO/ASK，把「写入文件」设成「自动」照样弹卡。现已按档位执行
+  （结构性禁止文件与「禁止」档仍在前拦下）。
+- **长对话历史裁剪的字符预算分支不可达**：单轮工具循环里只有一个"真实用户消息"，
+  `keepFrom` 恒为 0，预算分支一次都不会触发，长对话实际上不会被裁剪。已改为
+  "先保底最近 N 轮，再对更早的单元按预算从新往旧保留"。
+- **档案 JSON 损坏时原文没有立即备份**：注释声称"已在 init 里转存"，但代码只有
+  "覆盖前转存"，于是"读出来就是坏的、用户还没保存"这一最需要人工救回 Key 的场景没有备份。
+  已在初始化时补上（幂等，已有转存不覆盖）。
+- **测试工具 `toolNames()` 一直是空**：它从 messages 里找 tools，而 tools 是请求体顶层字段 ——
+  相关断言要么必然失败、要么永远假绿（比缺测试更危险）。已修，并补用例钉住
+  「JSON 夹带协议不下发原生工具清单」。
+- **19 处空 catch 不再静默**：有诊断价值的 12 处改为记日志（其中 4 处"用户明确操作却静默失败"
+  补了 Toast：保存控制台日志、复制日志、设置背景图、请求忽略电池优化）；刻意吞掉的 7 处写明理由。
+- **`kaze-ai-watchdog` 崩溃**：流式请求正常结束会 interrupt 看门狗线程，而它卡在 `Thread.sleep`，
+  未捕获的 `InterruptedException` 直接 FATAL 掉整个应用。已捕获并退出循环，外层兜 `Throwable`。
+
+- **Java 版本推断两个真 bug**（新增的测试抓到，都会让服务端启动时
+  `UnsupportedClassVersionError`，而平时只看界面发现不了）：
+  1. `1.17 ~ 1.20.4` 返回 **1**（少写一个 7），界面显示「自动适配 Java 1」；
+  2. 快照版年份比较写成 `year >= 26`，而 `year` 是 `2020` 这样的四位数 —— 恒为真，
+     于是**所有快照都被判成 Java 25**（`20w45a` 应 Java 8、`21w37a` 应 17）。
+
+### Removed
+
+- **AI 联网搜索**：整个搜索模块（各搜索源 + 凭据分槽 + 本机浏览器抓必应）连同设置页入口一并移除，
+  净删约 1200 行。**`fetch_page` 工具保留** —— 它让 AI 读取用户指定的网页，与"AI 自己联网搜"是两件事。
+- **悬浮窗权限索要**：`SYSTEM_ALERT_WINDOW` 权限、授权引导卡与相关入口全部删除。
+
+## [0.5.3] - 2026-10-21
+
+### Added
+
+- **流式输出思考过程**：正文里内联的 ` thinking` / `<thinking>` 段现在也**实时**分流进「思考过程」（此前只有原生 `reasoning_content` 字段会流式；内联那批要等整轮结束才被事后拆出来，观感是「思考先出现在正文、结束时又突然跳进折叠面板」）。标签被切在两个流式分片之间（`<thi` + `nk>`）也不会漏出半截标签；原生与内联两条来源合并去重
+- **每个工具可单独设权限**（借鉴 Operit 的 Allow automatically / Ask every time / Deny）：读取文件、列目录、抓取网页默认「自动」；写入文件默认「每次询问」；也可设为「禁止」（永不执行，并会告诉模型它被禁用了，免得反复重试）。设置页新增「工具权限」分组。**两种工具协议都拦**，换协议绕不过去；读取敏感文件（凭据、ops.json、开了 rcon 的 server.properties）始终要确认，不随「自动」放宽
+- **工具执行时间线**：每次工具执行显示状态与耗时（成功/进行中/失败/已拒绝/已跳过），失败与拒绝上红 —— 此前只有一行小字，成功与失败长得一样
+- **长对话自动裁剪**：历史按字符预算丢弃更早的消息，但保证工具调用与其结果同生共死、system 提示与最近若干轮保底 —— 此前历史只增不减，长对话必然超出模型上下文
+
+### Fixed
+
+- 修崩溃：`kaze-ai-watchdog` 线程的 `InterruptedException` 未捕获，导致每次流式对话正常结束都可能 `FATAL EXCEPTION` 掉整个应用
+- 修测试 flake：`ConsoleFollowTest` 用后台线程驱动 Compose，偶发 `Detected multithreaded access to SnapshotStateObserver`
+
+### 合规（许可证）
+
+- 许可证全文随 APK 提供（GPL-3.0 第 4/5 条），应用内可滚动查看
+- 新增 `COPYRIGHT`：版权归属、`GPL-3.0-or-later` 的取舍理由、为何不能改成 MIT/Apache
+- 构建新增 `syncLicenseAssets`：从仓库根目录自动同步许可证文本进 assets，避免脱节
+
+## [0.5.2] - 2026-10-18
+
+### Added
+
+- **白名单功能**：玩家管理卡可直接查看/添加/移除/清空白名单，**不依赖服务端运行**（直接读写 `whitelist.json`）；离线服 UUID 按 `UUID.nameUUIDFromBytes("OfflinePlayer:<名>")` 生成，有 `usercache.json`/`ops.json` 时优先采用其中的正版 UUID；新增 `white-list` 与 `enforce-whitelist` 两个开关；名单为空且白名单已启用时红字警告（否则等于没人能进服）
+
+### Fixed
+
+- **崩溃**：`kaze-ai-watchdog` 线程的 `InterruptedException` 未捕获，导致每次流式对话正常结束都可能 `FATAL EXCEPTION` 掉整个应用（真机日志栈：`Thread.sleep` → `InterruptedException`）。看门狗改为捕获中断并退出循环，外层兜 `Throwable`；`cancelActiveAsync` 的守护线程同样包 `runCatching`
+- **测试 flake**：`ConsoleFollowTest` 用后台线程驱动 Compose，偶发 `Detected multithreaded access to SnapshotStateObserver`。改为在测试线程同步写入
+- 修测试 flake：ConsoleFollowTest 用后台线程驱动 Compose
+- 修崩溃：kaze-ai-watchdog 的 InterruptedException 把整个应用带崩
+
+## [0.5.1-beta.2] - 2026-10-18
+
+### Fixed
+
+- 文档：写明 or-later 的取舍理由
+- Merge branch 'chore/license-compliance': 许可证合规修正
+- 修编译：补 FontFamily 与 sp 的 import（CI 39041864995 / 39041950435 抓到）
+- 合规：许可证全文随 APK 提供、补版权归属、修正第三方声明
+- 更新 README.md
+- fix: 修复控制台日志与备份归属的四处逻辑缺陷 (#13)
+- chore: release 标题统一为 tag 本身 (#12)
+
+### 合规（许可证）
+
+- 许可证全文随 APK 提供：`assets/LICENSE-GPL-3.0.txt` 与 `THIRD_PARTY_NOTICES.md`，应用内「关于与许可证」可滚动查看全文（GPL-3.0 第 4/5 条要求）
+- 新增 `COPYRIGHT`：版权归属、`GPL-3.0-or-later` 的取舍理由、为何不能改成 MIT/Apache、预编译二进制与商标说明
+- 修正第三方声明三处失准：`materialkolor` 实际未使用、`ui/theme/blur|shader` 路径已删除、armhf 的 proot 实际来自 `app/src/armhf/assets/proot-armhf.tar.gz`
+- 构建新增 `syncLicenseAssets`（`preBuild` 依赖）：从仓库根目录自动复制许可证文本进 assets，避免根目录与 APK 内文本脱节
+
+## [草稿 · 未发布]
+
+> 以下条目是 v0.8.x 开发过程中的草稿，实际已在 [0.8.0] 发布；
+> 保留在此仅作追溯，**不属于当前未发布内容**。
+
+### Added
+
+- **核心更新**（实例详情 → 运行 → 「核心版本」卡片）
+  已建实例可以检查服务端核心有没有新版本，并一键下载替换。
+  - **Paper / Fabric**：比对构建号 / loader 版本（有完整版本列表，最准）；
+  - **Purpur / Spigot / 原版 / Forge / NeoForge**：比对下载地址（地址带版本号，变了就是新包）；
+  - **自己导入的 jar**：不支持 —— 没有上游可对比，界面直接说明。
+  - 升级前必须停服（运行中进程占着旧 jar，换完跑的还是旧代码）；旧 jar 先改名 `.old` 备份，
+    新包下完并通过 SHA-1 校验才删备份，中断自动还原。
+  - Forge / NeoForge **不自动替换**：新版要重跑安装器生成依赖库，直接换会让实例变「半装」。
+  - `ServerInstance` 新增 `coreBuild` / `coreDownloadUrl`（带默认值，旧存档读出为「未知」，不影响已有实例）。
+
+- **插件 / 模组更新**（附加 → 「已安装」右侧「检查更新」）
+  - 新增来源台账 `plugins/.kaze-addons.json`（模组在 `mods/`）：记文件名 → 项目 / 版本 / loader / MC 版本。
+  - **老版本装的插件也能识别**：台账里没有的，用文件 SHA-512 去 Modrinth `/version_file/{hash}`
+    反查，成功则补写台账 —— 不需要重装。
+  - 结果分四段：可更新（带版本对照 + 一键全部更新）/ 已是最新 / 认不出来源 / 上游无兼容版本。
+  - 升级逐个串行下载（并发会被 Modrinth 限流），失败不中断并一起汇报；上游改过文件名时删掉旧文件，
+    避免服务端同时加载两份。
+  - 判定不会把**降级**当成更新；认不出来源时如实说明，不谎报「已是最新」。
+
+### Fixed
+
+- 核心 / 插件的更新提示里，若上游把当前版本从列表里删了，按「取最新」处理并在文案里说明，
+  而不是静默跳过（静默跳过会让用户以为上游没更新）。
+
+
+
+---
+
+## [0.5.1-beta.1] - 2026-10-11
+
+### Added
+- **实例高级设置**：自定义 JVM 附加参数（空格分隔，追加在固定参数之后）+ nogui 开关，建好之后随时改，重启生效
+- **控制台 DIY 包**：快捷命令 chip 行（点按发送、长按删除、编辑器上限 12 条）、级别过滤（全部/信息/警告/错误）+ 关键词搜索、日志字号（10–20sp）、时间戳前缀开关
+- **一键重启**：实例详情动作行、服务端列表 ⋮ 菜单两处新入口（与首页共用「优雅停止 → 等存档完成 → 再启动」链路，最多等 120 秒）
+- **连接地址一键复制**：实例详情显示本机 `127.0.0.1:端口` 与局域网 `IP:端口` 并可一键复制；服务端启动时地址直接写进控制台
+- **实例置顶**：服务端列表置顶优先、组内保持原顺序，行内图钉标记
+- **停服自动备份**：实例级开关，服务端退出后自动打包（`auto_` 前缀），保留最近 5 份且永不触碰手动备份
+- AI 未配置时给出可执行的下一步引导（去哪里点、填什么）
+- **控制台 AI 入口开关**：设置页新增开关（默认关），控制命令输入行的 AI 助手按钮显隐；关闭时仍可从「服务端」页顶栏进入 AI 助手
+- **MCP 服务（外部 AI 控制）**：内置 MCP 服务端（Streamable HTTP，`POST /mcp`），Claude / Cursor 等客户端凭「连接地址 + 访问令牌」即可读控制台、发命令、启停实例、改配置、打备份（11 个工具）；监听地址与端口同项可配置（0.0.0.0 局域网 / 127.0.0.1 仅本机 / 自定义 IPv4），映射端口与自动分配范围可自定义（被占用时按范围顺延取第一个可用端口），令牌 Keystore 加密存、可随时重新生成，服务默认关闭
+
+### Fixed
+- MCP 的 `start_server` / 优雅 `stop_server` / `restart_server` 改为提交后台执行、立即返回：此前整条启动链路（部署环境、装 Java 等动辄数分钟）在 HTTP 请求线程上同步跑，外部客户端 30–60 秒必超时，worker 线程池被占死后状态/控制台查询也无响应；失败原因会写进实例控制台（`read_console` 可见）
+- 实例名以 `auto_` 开头时，其**手动备份**会被自动备份清理误判成冗余删除（判别前缀改为 `auto_ + 实例名前缀`）
+- 停服自动备份与新启动的竞态：备份开跑前检测到实例已被重新拉起则让位跳过，不打包正在被写动的世界
+- NewServer 向导底部主按钮缺导航栏避让（三键导航设备上系统栏叠在按钮上）；AI 设置表单页漏 `imePadding`（键盘盖住下半屏且滚不出来）
+- 日志查看器 300KB 文本全页无界滚动改为有界画布内滚；诊断页 1200 行日志卡无界占高加限
+- 备份行「导出/删除」收进溢出菜单，360dp 屏文本列不再被挤到截断
+
+### Changed
+- 控制台整改：筛选/搜索/显示设置收进默认收起的栏（动作行「筛选」开关），快捷命令行只在运行中或有内容时出现，动作行按钮 48→44dp
+- 全应用空间整改：八个页面的固定区瘦身、死底距（无底栏子页 96dp→24dp）、重复信息去重（运行时长卡、状态胶囊、第三处计数等）、日志/诊断卡有界化、AI 气泡宽度随内容收缩、流式推理限高自动贴底
+- 文档整理：明确 README、用户手册、维护笔记与历史计划的职责；统一主线主题和 Java 版本说明，并修正重复的 Unreleased 标题。
+
+## [0.5.0-beta.1] - 2026-10-05
+
+### Added
+- AI 助手：全屏聊天页 + 独立设置页；流式输出（思考过程逐 token 实时显示，取消即时生效）
+- AI 工具：读取/列出/写入实例文件（写入确认 + 自动 .bak 备份 + 敏感文件读取需确认 + 注入防护）、抓取网页正文、执行控制台命令
+- 控制台命令三档控制（借鉴 Harness 权限分层）：仅建议（默认）/ 白名单自动（查询类直接执行）/ 全部自动，所有执行记入审计日志（ai_audit.log）
+- AI 记忆：read/write_memory 维护每实例的长期笔记，随每轮对话自动注入
+- AI 联网搜索四源：Tavily / 博查 / SearXNG（免 Key 自建）/ 本机浏览器（悬浮窗授权走真实窗口），带 5 分钟结果缓存
+- AI 配置：多模型档案（可建多份、单选分配），API Key 用 Keystore AES-GCM 加密存储，需要附加参数的服务商可自定义请求体 JSON
+- 更新机制改为以发布日期为准（不再比较版本号），更新弹窗显示发布日期；预发布版本自动标记、stable 通道不推送
+- AI 页新增：删除会话历史（带确认）、一键回到底部、token 用量与缓存命中显示
+
+### Fixed
+- 原生批量工具调用挂起时丢结果（恢复后被服务端 400 拒绝）、未运行实例谎报已执行、路径显示未净化、恢复对话 id 撞车崩溃、超时/取消被阻塞读延迟最多 240 秒
+- 控制台：AI 建议命令按消息记录的实例执行（切实例后不串台）、写文件区分脚本类高危警示
+
+### Changed
+- DeepSeek 集成迁移到 V4 机制（deepseek-flash + thinking 参数控制思考；旧模型名官方已停用，自动归一）
+- AI 回复的 token 用量与缓存命中随回答显示
+
+## [0.4.0-fix] - 2026-10-01
+
+### Fixed
+- 修 v7a（MTK）部署失败现场被噪音淹没：厂商注入应用的 `LD_PRELOAD`（`libdirect-coredump.so`）不再带入 guest——此前 proot 把它带进 Ubuntu，guest 的 ld.so 给**每个** guest 进程刷一条 `ERROR: ld.so: ... ignored.`（非致命）；失败消息改为滤掉该噪音并取输出**末尾** 300 字符（apt 的真错误在最后），下次失败能直接看到真原因
+- 修诊断日志「闪退现场补捞」在老系统（MTK Android 9）整屏打印 logcat 用法帮助：`--uid=` 是老 logcat 不认识的参数，已去掉（应用跑 logcat 本就只能看到自己的条目）并加防护——再遇到不支持的参数不会把用法文本当日志尾巴记录
+
+## [0.4.0] - 2026-10-01
+
+### Changed
+- P2 收尾六处：后台启动守护失败不再无声（记入诊断日志）、守护服务存活期持部分唤醒锁（熄屏后 CPU 不再挂起服务端子进程）、下载重定向一律拒绝明文 http 且缺 Location 不漏连接、tar 解压加 8GB 写出上限 + 建链前越界校验 + 可取消、新建向导转屏保留核心/版本选择
+- 修实例库扫描回写的覆盖竞态：扫描结果未变化不回写、扫描期间 instances.json 被外部改过则放弃回写（冷启动后台扫描不再可能盖掉并发写入的新数据，CI 偶发失败同源）
+- P2 修复 18/19/20：备份按实例 id 归属、轮转后回读游标、Forge 老版本号解析
+- P2 修复 15/16/17：背景图按采样解码、冷启动不再主线程读盘/解压、部署锁在取消时归还
+- P2 修复 10/11/12/13：向导占用端口不再组合期读盘、精确输入非法不再静默、下载失败不再残留、恢复纳入 backupBusy
+- P2 修复 7/8/9/22：SAF 授权不再自毁、更新状态机有出口、更新下载脱离页面作用域、去掉嵌套点击
+- P2 修复 4/5/6/21：插件页不支持核心禁用、搜索 facet 不再写死 paper、MC 版本过滤不回退、搜索乱序与错误槽位
+- P2 修复 1/2/3/14：备份名净化、恢复实例 ID 去重、端口范围、目录创建竞态
+- P2 界面：日志导出名与失败反馈、readTail 补跳、端口不再陈旧、清空/删除补二次确认、快捷入口不再空实现、主页下拉按各自状态
+- P2 核心：stdout 句柄不泄、重定向按当前跳解析、Java 目录名取实际值、Forge 安装可中止、补丁残留、备份规则
+- P2：properties 保存保留注释、端口分配与写盘同临界区、EULA 锚定匹配、体积档位按舍入判定
+- P2：退出处理幂等、实例删除后回收常驻状态、占用采样不再抓别人家的 java、聊天行不算名单
+- 修复 P1-10/11/12/13（开关失灵、EULA 勾选被连带、控制台批量发布行数爆炸、日志分块回读拼坏边界行）
+- 修复 P1-6/7/8/9（存储权限、启动检查更新、安装失败无反馈、插件模组结果串台）
+- 修复 P0 数据安全三处 + P1-5（停止拦不住已排定的自动重启）
+- 控制台文字精简，真机不再被截断
+- 修编译：MemorySlider 的 Slider 需要 OptIn(ExperimentalMaterial3Api)
+- 实例可随时改内存分配；server.properties 支持交给外部应用编辑
+- docs: 新增详细的用户使用说明 docs/使用说明.md，并在 README 加文档入口
+- 强制停止确认框：表述改严谨（"可能会丢失"，并写清 SIGTERM → 最多 5 秒）
+- 强制停止前先弹确认；服务器自己停稳时该提示自动收起
+- 修测试编译：反引号测试名里不能有 `.`（JVM 方法名非法字符）
+- 修编译：PROC_STATS_INTERVAL_MS 误写进类体（CI 33 秒抓到）
+- 控制台占用数据：CPU 采样优化（1 秒节拍 + EMA 平滑）+ 新增整机可用内存
+- 停止服务器：不再自动强杀，改成「停止中再点一次 = 强制停止」
+- 控制台：占用数据读错了进程（CPU 偏低 / 内存 0.00 GB）
+- 控制台：修掉采样轮询的初始化顺序坑（CI 抓到 12 个 UI 测试失败）
+- 控制台：占用数据一直「采样中」—— 采样循环从来没被启动过
+- CI：加一条「只编译 APK、不发版」的 workflow
+- 控制台：占用数据独立成行，行数不再被挤压
+- 更新 README.md
+- 从仓库移除 .zcodeignore（文件保留在本机）
+- 从仓库移除 .zcodeignore（文件保留在本机）
+- 备份删除加二次确认（Bug 清单 P0-1）
+- 服务端强制结束后仍显示"运行中"：加状态自愈
+
+## 历史开发记录（归档，非当前待发布内容）
+
+> 以下内容保留旧版开发与排查细节，仅供追溯；当前未发布变更只看文件顶部的 `## [0.11.1] - 2026-11-09
+
+### Fixed
+
+- **樱花映射登录后报 `Unexpected 'null' value instead of string literal at $[0].status_reason`**
+  樱花 `/v4/tunnels` 的响应里 `status_reason` / `note` / `extra` / `remote` / `local_ip`
+  等字段会直接返回 `null`，而数据类把它们声明成非空 `String`（带默认值）。
+  kotlinx 默认**不会**把显式 null 当作"用默认值"，于是解析抛异常，界面显示成
+  "密钥识别不了"——其实账号信息已经取到了。
+  现在解析器开启 `coerceInputValues = true`，并额外加了一层逐字段宽松解析兜底：
+  字段为 null、或类型漂移（例如 `online` 变成字符串 `"true"`）都只影响该字段，
+  不会再让整个登录/隧道列表失败。补了两个回归测试（null 字段 / 类型漂移）。
+  版本 0.11.0 → **0.11.1**（versionCode 36）。
+
+### Docs / Packaging
+
+- 赞助二维码更新为最新支付宝码（`docs/images/alipay.jpg`，替换旧的 `alipay.png`），README 赞助区注明"收款人洋洋，谨防仿冒"。
+- 新增 `dist/`：放入**已签名**的 arm64 安装包、`SHA256SUMS.txt` 与安装说明，并在 `.gitignore` 里为 `dist/*.apk` 开例外 —— 克隆仓库即可直接安装，不必自己构建。
+
+---
+## [0.11.0] - 2026-11-09
+
+### Added
+
+- **资源中心内容源：官方 + 镜像，自动回退**
+  以前写死 `api.modrinth.com`，网络不通就是"没有可用条目"。现在内置
+  **官方 Modrinth** 与 **MCIM 国内镜像**（`mod.mcimirror.top/modrinth/v2`），
+  默认「自动」：官方优先，失败自动切镜像；也可在资源中心右上角锁定某个源或填自定义 v2 地址。
+  推荐列表过滤后为空时**退回全量**（宁可显示"可能不兼容"，也不让整页空着）。
+- **客户端专用模组检测（可多选停用）**
+  模组页新增「客户端专用模组检测」：按 `fabric.mod.json` 的 `environment=client`、
+  已知客户端模组名单、Modrinth 的 `server_side=unsupported` 三条证据判定，
+  列出结果并默认勾选；支持「停用所选」与「全部停用」，只改名 `.disabled` 不删文件。
+- **崩溃自动重启的界面开关**
+  重启逻辑本来就在 `DefaultServerManager`（连续次数上限、成功启动清零），
+  但一直没有入口；现在在「实例详情 → 高级设置 → 崩溃后自动重启」可直接开关。
+- **公网与远程（新页面）**
+  主页「远程」进入，三条线路 + 一个远程面板：
+  - **Tailscale**：检测是否安装/是否拿到 100.x 地址，一键打开客户端，复制"朋友连接地址"；
+  - **樱花映射（SakuraFrp）**：应用内用**访问密钥**登录（API 只支持 Bearer 密钥，没有密码登录），
+    列出账号下隧道、选择后一键启动；frpc 配置由 `POST /v4/tunnel/config` 直接生成，
+    使用樱花官方分发的 `linux_arm64` frpc（约 20 MB，校验 md5）；
+  - **自建 frp**：填 frps 地址/端口/令牌/远程端口，应用生成 TOML 并启动同款 frpc；
+  - **远程管理**：复用「客户端同步」的 HTTP 服务，新增
+    `/api/status`、`/api/logs?n=`、`/api/command?cmd=`、`/api/start`、`/api/stop`（均需令牌），
+    把端口经 Tailscale/frp 暴露即可在浏览器远程看状态/日志、发命令、启停服务端；
+  - **远程串流说明**：Sunshine / foundation-sunshine 是 x86_64 桌面串流服务端（需 GPU 编码），
+    无法在手机 ARM 上运行；页面内给出 PC + Moonlight + 同一 Tailscale 的可行方案与链接。
+  - frpc 运行在 proot 的 `/root/kaze-net/` 下，不需要 root / Termux。
+- 版本 0.10.0 → **0.11.0**（versionCode 35）。
+
+---
+## [0.10.0] - 2026-11-09`。正式发布摘要仍以带版本号的标题为准。
+
+### Fixed
+- **控制台文字精简，真机不再被截断**（真机截图反馈）。
+  监控行原本是 `CPU 14%（1.1 核）· 内存 0.28 GB（2%）· 整机可用 3.20 GB`，在手机一行里放不下，
+  被截成「整机可…」；输入框提示词折成两行；标题副标题被截成「Java 17 · ··」。现统一缩短：
+  - 监控行 → `CPU 14%（1.1核）· 内存 0.28G（2%）· 可用 3.2G`（去掉多余空格、`GB`→`G`、"整机可用"→"可用"，
+    可用量保留一位小数；低内存提示简化为「（低内存）」）。读不到时写「内存读不到（pid N）」。
+  - 输入框提示词 → `输入命令（stop / op…）`，一行放得下。
+  - 标题副标题去掉冗余的 `MC ` 与内存上限（上限在实例详情里，实际占用就在下面这行监控里），
+    现在是 `1.20.1 · Forge · Java 17`。
+- **实例建好之后也能改内存分配；配置区新增「用其他应用打开 server.properties」**（真机需求）。
+  - **内存分配可随时修改**：范围（512~8192 MB、256 MB 一档）、自动分配下限与滑块此前只存在于
+    创建向导里，实例一旦建好就再也改不了内存。现在规则收到 `core/server/MemoryLimits.kt`，
+    向导与「实例详情 → 修改内存分配」共用**同一个** `MemorySliderRow` 控件、同一套归一化，
+    所以"建好之后再改"和创建时看到的完全一致（含"用建议值 / 精确输入"）。内存是启动参数
+    （`-Xmx`/`-Xms`），运行中修改只落盘，控制台会写明「当前进程仍按旧值运行，重启后生效」。
+  - **`server.properties` 可直接交给系统 / 第三方编辑器**：实例详情「配置」区新增「用其他应用打开」，
+    走 FileProvider 的 `content://`（`file://` 在 targetSdk≥24 会抛 `FileUriExposedException`，
+    异常一吞按钮就"点了没反应"），**并同时授写权限** —— 只读授权的话编辑器打开后存不回去。
+    文件还没生成过（没启动过）时，先按编辑器里的当前值落一份，免得对方打开的是空文件。
+    `file_paths.xml` 补上默认实例根 `/sdcard/KazeS`：少了这条，默认布局下取 URI 会失败；
+    自定义实例目录不在可共享范围时明确提示真实路径，不静默失败。
+  - 顺带**修正「整机可用内存」的读数来源**：改用 `/proc/meminfo` 的 `MemAvailable` ——
+    创建向导里已实测真机 `ActivityManager.MemoryInfo.availMem` 会异常返回 `totalMem`，
+    那样"可用"会恒等于"总量"（看着像内存怎么用都不掉）。新增 `MemoryLimitsTest` 4 条单测。
+- **强制停止要先确认；服务器自己停完了，这个提示要自动收起**（真机要求："点强制关闭按钮，要提示确定强制关闭。当询问时，服务器真正自己关闭完成时，关闭显示的是否强制关闭的提示"）。
+  - 新增共享组件 `ui/components/ForceStopDialog.kt`：「停止中」再点按钮不再直接强杀，而是先弹确认框，
+    文案把代价与过程说清楚（可能正在保存世界；先发 SIGTERM、最多等 5 秒；**没存完的部分可能会丢失**），
+    两个选项是「强制停止」/「继续等它存完」。
+  - 框带一个 `stillStopping` 参数：**服务器自己停稳（状态离开 Stopping）时它自己调 onDismiss 收起** ——
+    否则用户会对着一台已经停好的服务器点"强制停止"。
+  - 三个入口（首页主按钮 / 实例详情 / 服务端列表行）统一改成"Stopping → 弹确认框 → 确认后
+    `forceStopInstance()`"；`AppViewModel.stopInstance()` 不再自动改走强制（保留兜底：Stopping 时忽略），
+    确保没有入口能绕过确认把进程砍掉。
+- **控制台占用数据：CPU 采样逻辑优化 + 新增「整机可用内存」**（真机需求："优化 cpu 读取数据逻辑，添加显示剩余可用 ram"）。
+  - **采样节拍 2 秒 → 1 秒**，并给 CPU 读数加了一次 **EMA 平滑（α = 0.5）**：窗口越短越跟得上
+    突发负载（8 核上一个核忙 0.2 秒，摊进 2 秒窗口里几乎看不见），平滑则让百分比和"（x 核）"
+    不再来回跳。新增纯函数 `ProcessStats.smoothCores()` + 3 条单测。
+  - **每拍只读一次 `/proc`**：旧写法在 `if (pid == null || sample(pid) == null)` 之后又 `sample(pid)`
+    一次，同一拍读两遍，白花一倍系统调用。
+  - **瞬时读失败不再清零基线**：只有"认到的 pid 变了"才作废基线；同一个进程偶发读失败时保留基线，
+    下一拍用更长的时间窗继续求差（旧实现在这里重置，数字会一顿一顿）。另外连着丢 3 拍（≈3 秒）
+    才把整行清回"采样中"，避免瞬时失败闪一下。
+  - **新增「整机可用 X.XX GB」**：用 `MemoryInfo.availMem`（它把可回收的 page cache 算作可用，
+    比看 `MemFree` 有意义得多），系统判定低内存时追加「（系统低内存）」。服务端 OOM 是手机上最
+    常见的"莫名其妙崩"，把剩余量与服务端占用并排显示，一眼能看出还有多少余量。
+- **停止服务器会把世界砍在保存中途**（真机反馈："停止服务器，还没 saving world 完就强制停了"）。
+  旧实现在 `stop()` 里挂了一个 **10 秒**定时器：到点先 SIGTERM、再 5 秒 SIGKILL。forge 存一个
+  世界可以远超 10 秒，于是 `saving world` 被砍在半路。现在把"要不要强杀"交给用户：
+  - **优雅停止只发 `stop` 命令，然后一直等**，绝不自动强杀；只在 15 秒 / 75 秒各写一行提示
+    （"仍在等服务器收尾…要立即终止请再点一次「强制停止」"）。
+  - **停止中再点一次 = 强制停止**：按钮文案在 `Stopping` 时变成「强制停止」，
+    走新增的 `ServerManager.forceStop()` —— SIGTERM（让 proot 执行 `--kill-on-exit` 把 guest 的
+    java 一起带走）→ 5 秒不退再 SIGKILL。`AppViewModel.stopInstance()` 在状态已是 `Stopping` 时
+    自动改走强制，所以三个入口（首页主按钮 / 实例详情 / 服务端列表行）行为一致。
+  - 顺带修 `restartInstance()`：等停止的时限放宽到 120 秒，**超时就放弃本次启动**并在控制台说明，
+    而不是硬启 —— 硬启会在同一个世界目录上拉起第二个 java（旧版那 10 秒强杀恰好掩盖了这点）。
+- **控制台占用数据选错了进程：CPU 偏低、内存显示 `0.00 GB`**（真机反馈："cpu 显示占用过低，我觉得有问题，ram 没读取到，显示 0"）。
+  根因是 `findServerPid` 两条规则叠加：**`proot` 自己的 cmdline 里也含 `java`**（它就是要去跑的
+  java 路径），而它的 pid 比它拉起的 JVM 小、会被先扫到；旧逻辑紧接着还有一句
+  `if (cmdline.contains(实例目录名)) return pid` 的短路 —— 于是**把 proot 包装进程当成了服务端**：
+  真机上那个 `CPU 8%` 是 proot 自己的、`0.00 GB` 是 proot 自己的 RSS（≈2.8 MB，两位小数就是这么来的）。
+  所以不是"没读取到"，而是"读错了进程"；而 `sample()` 又把读不到静默退化成 0，看起来更像没读到。
+  - 选进程抽成纯函数 `pickServer()`：① 只在本进程**后代**里挑 ② 优先 `comm == "java"`
+    （把 proot / sh 这类包装进程排除掉）③ 同级取 **RSS 最大** ④ RSS 全读不到时取 pid 最大。
+  - `sample()` 读不到 `VmRSS` 时返回 **-1**（不再退化成 0）；界面显示「内存 读不到（pid N）」
+    而不是误导性的 `0.00 GB（0%）` —— 下次一眼就能看出是"读错进程"还是"真读不到"。
+  - `ProcessStatsTest` 增加 5 条选进程用例，含"proot 的 cmdline 也含 java"这条真机回归。
+- **控制台一直显示「CPU 采样中…」**（真机反馈："cpu 一直显示采样"）。
+  根因**不是** `/proc` 权限，而是**采样循环从来没被启动过**：
+  `AppViewModel.startProcStatsPolling()` 只有定义、**全仓库没有任何调用点** →
+  `_procStats` 恒为 null → 界面永远走"采样中"分支（括号里的兜底文案也因此一直是"扫描中"）。
+  上一轮把它误判成"`/proc` 读不到 / 匹配规则不对"，加了诊断计数、改了 pid 识别方式，
+  但循环不启动，改多少匹配逻辑都还是"采样中"。
+  - `init` 里启动该轮询 —— 与仓库里 `snapshot()` 那类"定义了却没人调"的疏漏同源。
+  - ⚠️ 首版把它写进了文件上方那个 `init`，而 `_procStats` 声明在 441 行：Kotlin 的 init 块
+    **按声明顺序**执行，协程被 `Dispatchers.IO` 立刻调度时 `_procStats` 还是 null → NPE →
+    循环当场死掉（真机上也一样死，只是异常没人看见，依旧显示"采样中"）。CI 立刻抓到了：
+    12 个 UI 测试报 `UncaughtExceptionsBeforeTest`。现改在 `_procStats` 声明之后的 init 里启动。
+  - 顺带：只在当前实例处于 `Running` 时才扫描 `/proc`。原来是不管运行与否每 2 秒
+    把整机 `/proc` 扫一遍（几百次文件读），纯浪费电；而这一行本来就只在 Running 时渲染。
+  - 新增 `ProcStatsWiringTest`：纯 JVM 的"接线检查"，防这一类"定义了却没人调"再犯
+    —— 它只在服务端运行中才有可见效果，普通单测与截图测试都照不到。
+- **控制台的性能监控把行数显示挤压**（真机反馈："控制台性能监控把行数显示挤压了"）。
+  占用数据与「N 行」原来挤在同一个动作行里：左侧 4 个 48dp 圆钮连间距已占 224dp
+  （360dp 屏整行只剩 104dp），行数自己还要 ~45dp。占用数据虽然带了
+  `weight(1f, fill = false)`，但旁边还有一个 `Spacer(weight(1f))` 在跟它抢同一份剩余空间
+  —— 它最多只分到一半，真机上只剩 20~50dp，被截成 `CP…`，看上去就是在挤压行数。
+  - 占用数据**挪出动作行、独立成一行**（整行宽度、`labelMedium` 细线，仅运行中出现）：
+    完整可读，那条很长的「CPU 采样中…（pid目录 … · 可读 … · 自己 …）」诊断串也终于读得全。
+  - 动作行只剩「按钮 + 行数」；行数补上 `maxLines = 1` + `softWrap = false` +
+    `TextOverflow.Ellipsis` —— 宽度不够时省略而不是折成两行（"被挤压"最直观的样子）。
+    另外 Compose 的 Row 先测所有不带 weight 的子项、带 weight 的最后才分剩余空间，
+    所以行数的宽度本来就不会被任何兄弟抢走。
+
+## [0.3.6] - 2026-09-27
+
+### Fixed
+- **控制台从来不显示 CPU / 内存占用**（真机反馈："控制台仍然没显示占用数据"）。
+  根因：`findServerPid` 要求 `/proc/<pid>/cmdline` 里同时出现 `java` 与实例目录名，
+  但 **proot 会把子进程 cmdline 里的路径改写成 `/mnt/...`**，实例目录名根本不出现，
+  于是永远匹配不到、pid = null，那行数据整块不渲染 —— 从来没在任何 proot 实例上工作过。
+  - 改用「**本进程的后代**里的 java」来认（app → proot → java，父子关系不会被 proot
+    改写）：顺 `/proc/<pid>/stat` 的 ppid 往上爬，最多 16 层；优先取带实例目录名的，
+    否则取 RSS 最大的那个。
+  - **服务器运行中就一定显示这一行**，取不到时显示「CPU 采样中…」而不是整行消失 ——
+    "采样没出来"和"功能没有"长得完全不一样，这次就是因此被误判的。
+  - 顺带印证：同一份真机日志里 Forge 自己也在报 `File not found or not readable:
+    /proc/stat` —— proot 下**整机** `/proc/stat` 确实读不到，按 pid 读才是对的路子。
+- **更新下载过程点取消没反应**（真机反馈）。两个原因叠在一起：
+  1. 界面毫无反馈：点「取消下载」只把一个标志置真，状态行 / 按钮 / 进度条全都不变，
+     要等下载循环跑回上一次检查点才收手 —— 观感就是点了没用。现在点下去**立刻**
+     把状态行换成「正在取消下载…」、按钮变「正在取消…」并禁用；点弹窗外部也走同一条路径。
+  2. 有几段完全不检查取消标志：取补丁元数据那段超时是 **20 秒**、探测下载源也有网络等待、
+     补丁拼装（纯本地 1~3 秒）同样没有回调 —— 这几段里点取消最长要等 20 秒才有反应。
+     现在每段网络调用前后都查一次；拼装**完成后**也查一次并删掉拼好的文件，
+     避免"用户已经取消了，包还是被装上"。
+- **设置页的检查更新不再显示 changelog**（真机要求）：只提示"发现新版本 x.y.z，
+  点「下载并安装」开始更新"。更新说明仍在应用启动时的更新弹窗里。
+- **服务器被自己的看门狗处决**：真机把 Forge 装好后服务器成功启动
+  （`Done (238.869s)!`），随后日志出现
+  `A single server tick took 73.67 seconds` → `Considering it to be crashed,
+  server will forcibly shutdown`。
+  - 根因一：`ServerProperties` 的默认表里**没有 `max-tick-time`**，回落到 MC 默认
+    60000ms —— 手机上单 tick 超 60 秒太容易了。现默认 `-1`（MC 官方语义禁用），
+    并给已有实例补写该键（旧实例的 `server.properties` 是首次启动后 MC 自己生成的）。
+    这与既有的 `pause-when-empty-seconds` 是同一类问题：**手机上的"慢"不等于"死"**。
+  - 根因二（需要用户自己调）：JVM `-Xmx3072M`，而设备已吃掉 6GB 交换分区
+    （`Swap total 16384MB / used 6187.84MB`），tick 卡在碰撞检测上是被换页拖住。
+    **建议把实例内存降到 2048MB 或更低。**
+
+### Added
+- **Forge / NeoForge 安装时显示实时进度**（真机反馈："卡在这"，停在
+  `Loading patches file: .../server.lzma`）。查明**不是卡死**：那一步是 binarypatcher
+  对 ~50MB 的 srg.jar 做 LZMA 解压 + 二进制差分，**全程一行输出都没有**，手机上要跑几分钟
+  （真机实测 10 分钟）。
+  - 安装期间每 **0.5 秒**刷新一行：`> 安装中 10 分 8 秒 · 已写出 4.6 MB（打补丁中，无输出属正常）`
+    —— "已写出多少 MB"读的是输出 jar 的实际大小，是真实的解压/打补丁进度。
+  - 用 `logReplace` **原地替换一行**，不会把控制台刷爆；且**只在安装器静默超过 2 秒**时
+    才占那一行，否则会把安装器正在输出的正常日志顶掉。
+  - 进度只扫 `libraries/net/minecraftforge/forge/` 这个小目录（限制深度）：每 0.5 秒
+    全量 walk 一次外部存储（FUSE）会把主线程拖垮。
+  - 安装完成时一并报出总耗时。
+- **玩家管理里点在线玩家名字，直接填进「玩家名」输入栏**：原来在线列表是一整行纯文本，
+  名字点不动，要 op / kick 谁就得手输（中文名、大小写、下划线都容易打错）。
+  现在每个名字一个可点标签（自动换行），点一下即填入，接着点「设为 OP」/「踢出」即可。
+
+### Changed
+- **实例详情去掉顶部的 运行 / 配置 / 世界 / 附加 标签栏**（真机要求）：四个分区按顺序
+  铺在同一页，仍然是一个 `Column` + `verticalScroll`（确认过不是 `LazyColumn`，
+  叠起来不会触发嵌套滚动崩溃）。连带清掉 `tab` 状态、`PrimaryTabRow`、
+  per-tab 的 `rememberSaveableStateHolder` + `SaveableStateProvider`（没有标签栏就没有
+  "离开组合"这回事，页内 `rememberSaveable` 自然保住）、切页回顶的 `LaunchedEffect`，
+  以及随之变成死代码的 `DetailTab` 枚举与两个 import。
+
+## [0.3.5] - 2026-09-27
+
+### Added
+- **设置里可选「更新方式」：完整安装包 / 增量补丁，默认完整安装包。**
+  - `更新方式` 新增在设置页的更新分区（自动更新 / 更新通道 / 更新方式 / 检查更新）。
+  - 默认整包是刻意的：补丁要拿本机已装 APK 当基线拼装，虽然每道都校验
+    （baseSha256 / targetSha256 / 签名），但比"直接下完整包"多一环；
+    让用户显式选"省流量"更稳妥。
+  - 只影响下载：`UpdateInstaller.download(..., allowPatch = false)` 时跳过补丁，
+    直接下整包；补丁失败本来就会自动回退整包，这条路径不变。
+
+### Changed
+- **设置页的「检查更新」不再显示 changelog**：只提示"发现新版本 x.y.z，
+  点「下载并安装」开始更新"。更新说明仍在应用启动时的更新弹窗里，或点开 Release 页看。
+
+### Added
+- **Forge/NeoForge 安装时显示实时进度**（真机反馈："卡在这" —— 停在
+  `Loading patches file: .../server.lzma`）。查明**不是卡死**：那一步是 binarypatcher
+  对 ~50 MB 的 srg.jar 做 LZMA 解压 + 二进制差分，**全程一行输出都没有**，手机上要跑几分钟。
+  - 安装期间每 **0.5 秒**刷新一行：`> 安装中 3 分 12 秒 · 已写出 41.2 MB（打补丁中，无输出属正常）`
+    —— "已写出多少 MB"读的是输出 jar 的实际大小，是真实的解压/打补丁进度。
+  - 用 `logReplace` **原地替换一行**，不会把控制台刷爆；并且**只在安装器静默超过 2 秒**
+    时才占那一行，否则会把安装器正在输出的正常日志顶掉。
+  - 进度只扫 `libraries/net/minecraftforge/forge/` 这个小目录（限制深度）：每 0.5 秒
+    全量 walk 一次外部存储（FUSE）会把主线程拖垮。
+  - 安装完成时一并报出总耗时。
+
+### Fixed
+- **更新下载过程中"取消不了"**（真机反馈）—— 两个原因叠在一起：
+  1. **界面毫无反馈**：点「取消下载」只把一个标志置真，状态行 / 按钮 / 进度条全都不变
+     （按钮还写着"取消下载"），要等下载循环跑回上一次检查点才收尾 —— 观感就是点了没用。
+     现在点下去**立刻**把状态行换成「正在取消下载…」、按钮变成「正在取消…」并禁用；
+     点弹窗外部也走同一条路径。
+  2. **有几段完全不检查取消标志**：取补丁元数据那段超时是 **20 秒**、探测下载源最多 8 秒、
+     补丁拼装（纯本地 1~3 秒）也没有取消回调 —— 这几段里点取消最长要等 20 秒才有反应。
+     现在每段网络调用前后都查一次；拼装**完成后**也查一次并删掉拼好的文件，
+     避免"用户已经取消了，包还是被装上去"。
+  - 顺带修：补丁下载的状态原本报在下载**之后**，整个下载期间界面停在上一条状态。
+
+
+---
+
+## [0.3.4] — 2026-09-27
+
+### Added
+- **控制台显示服务端 CPU / 内存占用（都带百分比）** —— 顶部那一行现在会显示
+  `CPU 12%（1.2 核） · 内存 1.83 GB（22%）`，每 2 秒刷新；服务端没跑时不占位。
+  - 服务端是 proot 的**孙进程**（app → proot → java），拿不到 `Process` 句柄，所以直接按
+    pid 读内核：`/proc/<pid>/stat` 取 `utime+stime`、`/proc/<pid>/status` 取 `VmRSS`，
+    pid 靠扫 `/proc/*/cmdline`（同时含 `java` 与本实例目录名）认出来。
+  - **CPU 必须两次采样求差**（累计 tick 本身没有意义）：`单核占用率 = Δtick / (Δt秒 × 100)`。
+    服务端多线程，单核占用率**可以超过 100%**，所以同时给出"用了几个核"，并把界面上的
+    `CPU%` 折算成整机占用率（除以核数）—— 否则 8 核机器上的 12% 会让人以为很闲，
+    其实是吃满了一个核。内存百分比按设备总内存算。
+  - 解析细节（`/proc` 第 2 个字段是可能含空格与括号的进程名、字段不足、tick 倒退
+    等）全部拆成纯函数并单独测：`ProcessStatsTest` 8 例。
+
+### Removed
+- **删掉选择版本页那条"常驻进度条"**（真机反馈："搜索栏和『第 2 步，共 3 步』之间有个
+  常驻的进度条"）。它在 `WizardProgress` 里，是画在步骤文字下面的
+  `WavyLinearProgress((step-1)/total)`，本意是"第几步"的静态指示。
+  - 之前已经做过两轮修补（关掉无限动画、把值算对），但**一条不动的进度条**在中文语境里
+    天然读作"有个任务卡住了" —— 怎么调都还是那个观感，所以这次直接删掉。
+  - 步骤文字本身已经把话说清楚（`第 2 步，共 3 步 · 选版本与资源`），删掉不损失信息。
+  - 列表加载中、下载中那两条**真进度**保留不动。
+
+### Changed
+- **Java（JDK）下载源也按实测重排**（真机反馈"java下载源也是，完善一下"）：
+  实测同一台机器、同一个 JDK17 aarch64 包（取前 4 MB）：
+  `mirrors.tuna.tsinghua.edu.cn` **5120 KB/s** ✓ / `api.adoptium.net` **999 KB/s** ✓ /
+  `mirrors.huaweicloud.com` **0 KB/s（只回 12 KB 错误页）** ✗ /
+  `github.com` 直连（Adoptium API 返回的 githubLink）**~40 KB/s** ✗ 最慢。
+  - 清华排第一；**githubLink 现在会过一遍 GitHub 加速镜像**（复用更新器那套 ——
+    它本身就是 `github.com/…/releases/download/…` 链接）；官方 API 直链保留
+    （不依赖文件名猜得准，最稳）；实测已坏的华为挪到最后当兜底。
+  - 进度文案也说清候选来自哪（清华 / Adoptium 官方 / GitHub 镜像）。
+  - 与"更新下载源"是同一套机制：`Downloader.downloadFromSources` 现在按**吞吐**探测，
+    顺序只是提示，真正决定选哪个的是实测速度。
+
+
+---
+
+---
+
+## [0.3.3-fix] — 2026-09-27
+
+### Fixed
+- **Forge 启动时控制台到一万多行就卡死**（真机反馈）—— 根因是 ViewModel **每来一行就整体
+  复制一遍列表**：`(cur + line).takeLast(N)` 是 O(N)/行，而 Forge 启动每秒几百上千行、
+  列表已有一万多条 ⇒ 每秒上千万次元素拷贝，外加同样次数的 Compose 重组合，主线程被拖死。
+  - 改为**缓冲 + 批量发布**：行只往缓冲里塞（O(1)），攒够 256 行或每 80ms 发布一次。
+    定时发布是必须的：只按行数触发的话，服务端安静下来时最后一批永远不显示 ——
+    而那往往正是 `Done (3.2s)! For help, type help` 这种最关键的收尾行。
+  - 并且**列表小于 2000 行时仍然逐行即时发布**：小控制台的手感与改造前完全一致，
+    只有真会卡死的场景才走批量。
+  - 新增 `CONSOLE_FLUSH_BATCH` / `CONSOLE_FLUSH_INTERVAL_MS` / `CONSOLE_EAGER_LIMIT`。
+
+### Added
+- **更新过程显示状态**（不再只有一句"下载中"）：弹窗里现在按阶段显示
+  「正在检查增量补丁…」→「正在探测最快的下载源…（多个镜像并发测速）」→
+  「命中增量补丁（省 ~95% 流量），正在下载补丁…」/「下载中 12.3 MB / 30.8 MB」→
+  「正在拼装补丁并校验 sha256…」→「下载完成…」；失败时明确说
+  「所有下载源都失败了（共 N 个候选）」。
+  - 起因：探测镜像那几秒、拼装补丁那几秒**看起来都像卡死**，状态行把它们区分开。
+  - 进度条也改了：**有真实百分比时显示确定进度条**，只有探测/拼装/校验这些
+    拿不到百分比的阶段才用不确定的滚动条（一直转圈会让人以为卡住了）。
+
+### Fixed
+- **更新下载慢（真机反馈"实在是太慢了"）** —— 根因在**源选择**，不在网络：
+  - 应用里 13 个加速镜像**实测只有 2 个能用**（同一台机器、同一个 30 MB 的包）：
+    `github.ednovas.xyz` 890 KB/s、`github.boki.moe` 706 KB/s，其余 11 个全部超时/失败；
+    而**直连 github.com 只有 ~40 KB/s**。
+  - 旧实现的探测只发 1KB Range 请求、按「连接+首字节」耗时排序 —— 直连 GitHub
+    **首字节很快但吞吐极低**，于是每次探测都是直连胜出，30 MB 的包要下十几分钟。
+    现在改为读最多 256 KB、按**实际吞吐（字节/毫秒）**排序
+    （`maxByOrNull`；语义从"耗时最小"变成"吞吐最大"，这一处也跟着改了）。
+  - `sources()` 原本是 `listOf(直连) + 镜像`：直连排第一，等于每次都先走最慢的路。
+    现在改成**镜像优先、直连兜底**。
+  - 镜像列表按实测速度重排（最快的两个放最前），顺带去掉两个重复项。
+  - 实测效果：同一批资产直连要十几分钟，走镜像 **40 秒（5~6 MB/s）**。
+- **下载源再优化一轮**（同上一项，一起发）：
+  - **补进 5 条新线路**：重新用 1 MB/10s 的口径测了 18 个镜像，**11 个可用**
+    （上一轮"只有 2 个能用"是因为那次探测取了 2 MB、超时 20 秒 —— 镜像限速/抖动会让
+    长探测更容易超时）。现在表里可用线路从 2 条增加到 11 条，历史线路留作兜底。
+  - ⚠️ 记一条**否定结论**：**不要做多线程分块下载**。同一镜像同一时刻整包下载实测
+    1 连接 7.2 MB/s、4 连接 3.5 MB/s、8 连接 2.0 MB/s —— 镜像按**连接数**限速，
+    连接越多每条越慢、总速反而下降。谁想加"6 线程 Range 下载"之前先复测这一条。
+
+
+---
+
+---
+
+## [0.3.3] — 2026-09-26
+
+### Added
+- **控制台可以往上翻更早的日志了**（内存窗口之外的历史）：列表顶部出现
+  「加载更早的日志」条目，点一下就从实例目录的 `console-output.log` 往前读一段
+  （读到头会接着读轮转的 `console-output.old.log`）。
+  - 实现：`ConsoleArchive` 从文件**尾部按 256 KB 分块往回读**，不把几 MB 日志整个读进内存。
+  - 边界处理（都是被测试抓出来的真 bug）：块边界切断行时要**把半行交给下一次调用**
+    （只放在局部变量里会跨调用丢失，丢的往往正是要找的报错）；提前凑够行数时偏移量
+    必须落在**块内部**（写成块起点会重复读同一块，表现为"翻不动"）；整块落在一行内部时
+    也要推进（否则死循环 → OOM）。回退偏移按**字节数**算 —— 中文一行 3 字节，用字符数会错位。
+  - 界面列表上限放宽到 6 万行（`CONSOLE_DISPLAY_MAX`）：否则回读的历史会被下一条
+    实时日志挤掉，表现成"点了加载没反应"。
+  - 用 LazyColumn 的 key 保持滚动位置，前插历史不会让视图跳走。
+  - **已知限制（已写进 KDoc）**：单行超过 128 KB 会被截断并标记 —— 往回读必须把逻辑行
+    拼完整，超长行会让中间状态膨胀（测试里直接 OOM）。真实日志行都在 1 KB 以内。
+  - **可回读的总量是磁盘上的约 16 MB**（`console-output.log` 8 MB + 轮转的 `.old.log` 8 MB，
+    更旧的会被删）≈ 12 万行 —— 内存 5 万行 + 磁盘 16 MB，再早的确实不存在了。
+  - 新增 `ConsoleArchiveTest` 6 例：分块拼回与原文逐行相同 / 每块 1 行也不漏 /
+    轮转前后都能读 / 读到文件头后 hasMore=false / 无日志文件安全返回 / 末行无换行符也能读。
+
+
+---
+
+---
+
+## [0.3.2] — 2026-09-26
+
+### Added
+- **增量补丁接入更新流程**：`UpdateInstaller.download()` 现在**先试补丁**——
+  用本机已安装 APK（`applicationInfo.sourceDir`）的 sha256 去比对补丁元数据里的
+  `baseSha256`，匹配就下补丁并拼装；任何一步不成立（没有补丁资产、基线不匹配、
+  下载失败、拼装校验不过、签名不符）都**静默回退整包**。
+  补丁是加速手段而不是必经路径，它失败绝不能让用户更新不了。
+  拼装结果先比 `targetSha256`（`ApkPatchApplier` 内部）再比**签名证书** ——
+  两道校验与整包路径完全一致，安全性没有放松。
+- **CI 自动出补丁**：新增 `.github/workflows/release.yml`，打 `v*` tag 时自动
+  跑测试 → 构建两个 ABI → **对上一个 release 的同 ABI APK 生成增量补丁** →
+  创建/更新 release 并上传 APK + 补丁（`patch-<from>-to-<to>-<abi>.{zip,json}`）。
+  发布说明从 CHANGELOG 同版本段落抽取（`tools/extract_release_notes.py`，
+  段落缺失时写占位说明而不是留空）；发布前校验 tag 与 `versionName` 一致。
+- `UpdateChecker.pickPatchAssets()`：从 release 资产里挑出 `patch-*.json`，且配对的
+  `.zip` 必须存在（纯函数，5 例单测）。不按 ABI 过滤 —— 该用哪份由 `baseSha256`
+  决定，名字里的 arch 只是辅助。
+- **更新弹窗可读化**：新增 `ReleaseNotes.toPlainText()`，把发布正文的 Markdown
+  转成对话框里能读的文本（标题 → 【】、引用去 `>`、加粗/行内代码/链接去标记、
+  表格 → `·` 连接、首个含版本号的标题丢掉），正文区改成固定高度 + 可滚动、显示全文。
+
+### Changed
+- **控制台行数改成中文缩写，并可点击看详情**：到 1 万以后不再显示一串数字，
+  缩成 `1.2万` / `1.2百万` / `1.2千万` / `1.2亿`，统统一位小数；
+  点一下弹「控制台统计」——内存中保留多少行、已滚出内存多少行、**完整日志多大、在哪**。
+  - 档位是混合十进制（万 10^4 / 百万 10^6 / 千万 10^7 / 亿 10^8）：1,234,567 显示
+    `1.2百万` 而不是 `123.5万`。
+  - 选档按**四舍五入后**的值判（n ≥ 0.95×档位）：否则 999,999 会落进"万"档算出
+    99.9999 → 显示 `100.0万` 这种怪值。现在进位成 `1.0百万`。
+  - 上限 5000 → **50000 行**（≈6 MB）。
+  - **关于"无限"**：内存里做不到 —— 每行约 130 字节，120 万行 ≈ 150 MB、1 亿行 ≈ 12 GB，
+    手机 App 的堆装不下。真正无限的是磁盘上的 `console-output.log`（append-only），
+    控制台只是它的滑动窗口；所以详情对话框必须回答"完整日志多大、在哪"。
+  - 新增 `CountFormat`（计数/体积短记法）+ 8 例测试。
+
+### Fixed
+- **更新弹窗把原始 Markdown 直接显示、而且被截断**（真机截图实锤）：原来
+  `Text(info.body.take(400))` —— 用户看到的是 `## v0.3.1-fix`、`>`、`**修复向**`、
+  `| 表格 |`，正文还只露出开头几行。
+  坑：发布正文是**硬换行**的，`**加粗**` 很容易跨行，逐行跑正则会漏掉那一对
+  （真机就是这么漏的）→ 必须先按段落合并软换行再清标记。
+- 测试基建：`-Dkaze.*` 现在会透传给测试 JVM（此前 Gradle 的 `-D` 只作用于守护进程，
+  两条"吃真实产物"的用例——真实补丁互通、真实发布正文——**一直在静默跳过**，
+  绿的但什么都没验）。
+
+---
+- **控制台被刷屏冲爆、以及服务器开久了顶到上限**（真机反馈两条）：
+  - **刷屏**：补全依赖 / 解压时每来一个文件就是一行，几千行瞬间把环形缓冲冲满，
+    真正有用的输出全被挤掉。现在 `ConsoleStream` 会把**同类刷屏**折叠成一行汇总
+    （`⋯ 同类输出已折叠 N 行（完整内容见实例目录的 console-output.log）`），
+    计数随刷屏持续更新。
+    ⚠️ 折叠必须**保守**：只认"文件操作动词开头 / 进度形式"的行
+    （Downloading / Extracting / 下载 / 解压 / 补齐 / `…%` / `3/128`）。
+    我第一版拿"前 20 个字符相同"当判据，把正常的服务器日志
+    （`【Server thread/INFO】: …` 这类共享前缀的行）也折叠了 —— 那是**信息**不是噪声，
+    是 `ConsoleFollowTest` 三个用例把我拦下来的。现在有专门的回归用例：
+    500 行聊天日志必须一行不少。
+  - **长期运行**：控制台上限 5000 → **20000 行**（约 3 MB），并把"超限被丢掉"这件事
+    在界面上说清楚 —— 标题变成「N 行（上限，更早的见 console-output.log）」，
+    而不是让用户以为日志没了。完整日志本来就一直写在实例目录的 `console-output.log`。
+  - 新增 `ConsoleStreamBurstTest` 6 例（折叠生效 / 计数增长 / **不同内容不误折叠** /
+    空行不折叠 / 换类重新计数 / `replaceLast` 原地进度行不受影响）。
+
+### Docs
+- 新增 [维护笔记](docs/MAINTENANCE.md)：把这次做增量补丁 + 自动发版时踩的坑记下来
+  —— 重点是一类**"静默成功"**的失败（单测全绿其实两条用例一直在跳过、
+  release workflow 全绿其实一份补丁都没生成、`gh --jq` 输出为空被当成"没有基线"），
+  以及对应的规矩：跳过必须 `::warning::`、吃真实产物的测试要能证明它真的跑了、
+  优先选能在本地预先验证的写法。另含 CI 流水线、测试基建、补丁格式、
+  PowerShell/adb 工具链的具体坑与发版检查清单。README 顶部加了指引。
+
+_（暂无未发布内容）_
+
+---
+
+---
+
+## [0.3.1-fix] — 2026-09-26
+
+### Added
+- **APK 增量补丁（补丁合成更新）—— 核心已实现并验证**：新版本只下"变化的那部分"，
+  由客户端把**本机已安装 APK** 里没变的条目拼进来，合成与官方包**逐字节相同**的新包。
+  - 实测：0.3.0 → 当前构建，103 个条目里 **83 个可本地拷贝**，补丁 **1.61 MB = 整包的 5.2%**
+    （整包 30.8 MB）。大头是 `libproot.so` 等原生库，逐字节不变。
+  - 格式 `kaze-apkraw-1`（参考 Operit 的 apkraw 思路、独立实现）：补丁 zip 携带
+    `meta.json`（`baseSha256`/`targetSha256`/`entries[]`）+ `tail.bin`（中央目录 + EOCD +
+    **APK 签名块**）+ 变化条目的**原始本地记录**。客户端按目标包的本地记录顺序重排，
+    `copy` 从本机包拷、`add` 从补丁拷，再追加尾部。
+  - 为什么不用 bsdiff/hdiffpatch：不需要 NDK、不用把 30MB 读进内存；更关键的是
+    **输出与官方包一致，所以签名仍然可验**（普通差分合成的包验不过 APK 签名）。
+  - 三道校验：打补丁**前**比对本机 APK 的 sha256 == `baseSha256`（用户装了别处来的包
+    或版本不对就直接走整包）；拼装**后**比对 == `targetSha256`；交给安装器前仍由
+    `UpdateInstaller` 比对**签名证书**。
+  - 新增 `tools/make_apk_patch.py`（CI 侧生成）与 `core/update/ApkPatchApplier.kt`（客户端拼装），
+    格式两端严格对应；新增 `ApkPatchApplierTest` 4 例：逐字节往返、基线不匹配拒绝、
+    补丁被篡改被 sha256 拦下、**真实生成器产出的补丁能被拼装**（Python ↔ Kotlin 互通）。
+  - 过程中被测试抓出两个真 bug：中央目录解析用了**大端**读（zip 是小端，导致目录解析成空表）；
+    本地记录长度照**中央目录**的 extra 算（应与**本地头**一致，两者可不同），
+    以及未处理 **data descriptor**（flag bit 3）。
+- **应用内「诊断日志」**（设置 → 关于与许可证 → 诊断日志）：应用自身的 logcat 落盘 +
+  环境自检合在一页，可刷新 / 分享 / 清空。
+  - 为什么需要：Android 的 logcat 只在**内存环形缓冲**里（main/system/crash 各 256KiB），
+    应用一崩、系统一回收就没了；普通应用也没有 `READ_LOGS` 权限读不到别人的日志。
+    但**可以读自己的** —— 以自身 UID 跑 `logcat --pid=<自己>`，输出的正是本应用能看到的
+    条目，包括系统为我们打的 `AndroidRuntime: FATAL EXCEPTION` 堆栈。接进文件即可，
+    不用插电脑、不用 root 就能事后追溯（`files/logs/app-<日期>.log`，留最近 3 天、
+    单文件 2MB 上限，服务端刷屏也写不满存储）。
+- **闪退也一定留下现场**：日志采集器跑在应用进程里，进程一闪退它就跟着死，系统最后打的
+  `FATAL EXCEPTION` / native 崩溃根本来不及落盘。两条补法：
+  - **崩溃处理器**：`Thread.setDefaultUncaughtExceptionHandler` 在崩溃线程上**同步**写出
+    完整堆栈（含 cause 链）再交给系统，保证 Java 崩溃有记录；
+  - **启动时补捞**：logcat 的环形缓冲在进程死后**仍在内存里**，所以下次启动用
+    `logcat -d --uid=<自己> -t 800` 把上一段的尾巴捞回日志文件并标注「闪退现场」——
+    实测（MuMu 上 `kill -11` 制造真闪退）成功捞到
+    `F DEBUG : signal 11 (SIGSEGV) ... SI_USER` 与周边的 crash_dump 行。
+  - 新增 `AppLogStoreCrashTest` 3 例（堆栈完整性 / cause 链不丢 / 目录位置）。- **实例/存档目录默认改为手机根目录的 `KazeS/`**（如 `/sdcard/KazeS`）：存档、服务端 jar、
+  运行日志、备份都在用户能用文件管理器直接看到、直接拷贝的地方，不用记
+  `Android/data/...` 这种路径。写共享存储需要「所有文件访问」（Android 11+）或
+  WRITE_EXTERNAL_STORAGE（11 以下），所以采用前会**实地探测可写**（写一个探针文件），
+  没授权时退回 app 外部私有目录，不会出现"实例建到一半才发现写不进去"。
+  旧默认目录里已有的实例会尝试 rename 搬过去（同分区内是瞬时的）；跨挂载点搬不动时
+  留在原处照常可用（实例记录存的是绝对路径），设置页文案同步更新。
+
+### Changed
+- **「选择服务端核心」页改用各项目的官方图标**（此前是几何形状的 Material 图标 + 配色，
+  Purpur / Spigot / Fabric / Forge / NeoForge 之间只能靠颜色区分）。现在 Vanilla 是草方块、
+  Paper 是纸飞机、Purpur 是紫色立方、Spigot 是水龙头、Fabric 是线轴、Forge 是铁砧。
+  图标统一归一化为 192×192（透明的裁掉留白后垫浅灰底，否则 Spigot 的深灰 logo 在深色卡片上看不见），
+  首页实例下拉里的同一组件（28dp）一并生效。来源与授权见 `THIRD_PARTY_NOTICES.md`；
+  原版那张草方块是**本项目自绘的像素图**，不含 Mojang 贴图素材。
+
+### Fixed
+- **控制台从别的页面切回来时日志停在旧位置、得自己往下翻**：自动滚底用的是
+  `LaunchedEffect(lines.size)`，而 lines.size 每来一行就变一次 —— **每次变化都会取消
+  上一个 effect**，`animateScrollToItem` 这种持续多帧的动画被取消就停在半路。平时
+  "人已经在底部、只差 1 行"看不出来；切页回来时差了几百行，动画永远走不完，且服务端
+  持续输出会让 Compose 一直不空闲。改成单个 `snapshotFlow` 收集器（滚动不被新行打断），
+  并按距离区分：差得少平滑滚、差得多（切页回来/恢复跟随）直接跳。
+  新增 `ConsoleFollowTest` 3 例钉住；旧实现下 2 例失败（ComposeTimeoutException）。
+- **控制台日志上限 2000 行提到 5000 行**：原先 `ConsoleStream` 环形缓冲与 ViewModel 里
+  三处 `takeLast(2000)` 各写各的。现在统一为 `CONSOLE_MAX_LINES`，行数标签到上限时会
+  显示「5000 行（上限）」。完整日志始终落盘在实例目录的 `console-output.log`，
+  不受这个上限影响（「保存日志」与实例日志页都拿全量）。
+- **Forge/NeoForge「装了一半」导致永远起不来**：安装完成的判据原来是"有 `unix_args.txt`
+  就算装好"，而安装器是**先**写入口文件、**后**下那 60 多个依赖库的 —— 中途失败（断网、
+  DNS 不通、取消）会留下一个"看着装好了、库却不全"的目录，之后每次启动都跳过安装，
+  启动时报一长串 `Missing required library` 并退出，用户除了删实例重建没有出路。
+  改为以安装成功标记（`.forge-installed`，仅在 installer 退出码为 0 时写）为准；
+  有入口文件而无标记时日志会明确提示"上次安装未完成，正在补齐"，installer 幂等、重跑即可自愈。
+- **容器内 DNS**：proot 里从来没有配过 `/etc/resolv.conf`，容器内联网的程序一律解析失败
+  （apt 静默失败、Forge 安装器直接 `UnknownHostException`）。现在按系统当前 DNS 写一份并
+  在每次启动容器时绑定进去，换网络自动更新。
+- **首页「启动服务端」旁的控制台快捷入口切不回主页**：该入口用的是裸 `navigate()`，
+  绕过了底栏的 `popUpTo/saveState/restoreState` 语义，两种跳转混用后返回栈不可用。
+  已统一为同一个 `navigateTab`。
+- **版本页那个"常驻"的进度条**：波浪进度条的相位在定量态也一直流动，步骤指示条因此无休止
+  流动；同时 `loadVersions/loadBuilds` 在任务被取消或抛异常时不复位 `loading`，
+  进度条会永久停留。步骤条改为静态，加载状态用 `try/finally` + 请求序号复位，
+  并加了 45s 的界面可见超时与「重试」按钮。
+
+---
+
+### Security / 健壮性（一次全仓排查后的修复）
+- **实例库可能被一次半截写入清空**（数据丢失）：`load()` 解析失败静默返回空列表，
+  紧接着 `rescan()` 把空列表写回文件，用户的全部实例永久消失。现在解析失败先把坏文件
+  留档为 `instances.json.corrupt-<时间戳>`、再退回上一次的 `.bak`；写入改为
+  "临时文件 + fsync + rename"原子落盘，每次成功写入前保留上一份为 `.bak`。
+- **实例库移到内部存储**：原位置 `getExternalFilesDir` 在外部存储未挂载时返回 null，
+  `File(null, "instances.json")` 会退化成相对进程 CWD 的路径（写不进去却没人知道）；
+  Android 7–10 上其它应用也能改写它。旧文件一次性自动迁移。
+- **保存失败不再静默**：读取告警与保存失败分别通过 `loadWarning` / `saveError` 暴露。
+- **自更新 APK 增加签名校验**：哈希只在 GitHub 提供 `digest` 时才存在，而 APK 字节来自
+  多个第三方加速镜像 —— 镜像被控制就能返回"魔数合法、体积足够"的包。现在额外比对 APK
+  与本应用的签名证书，不一致或取不到签名信息一律判为不可用。
+- **`runCommand` 的超时分支原本永远返回不了**：`readJob` 是 `withContext` 的子协程，
+  proot 被杀后 guest 可能仍持有 stdout，阻塞读不会 EOF → 结构化并发一直等它，
+  "有界超时"变成**永久挂起**（Java 安装 / apt 卡住时只能杀应用）。现在超时分支按
+  SIGTERM → 关管道 → 强杀的顺序收尾。
+- **JDK 判定要求虚拟机本体**：`bin/java` 只是约 100KB 的启动器，真正的 `libjvm.so`
+  最后才落盘 —— 半截安装会被认成"已就绪"，服务端起不来又永远不会重装。现在必须有
+  `libjvm.so`（server 或 client）才算装好。
+- **实例状态表改为原子更新**：并发读改写会丢更新，表现为"已停止的实例仍显示运行中"，
+  进而停不掉也删不掉。
+- **控制台列表不再按下标回读实时 State**：后台协程整体替换 `lines`（切实例/清空）时
+  可能越界崩溃，改为直接持有元素。
+- **首页「重启」此前点了没反应**：它直接调 `startInstance`，运行中会被
+  `guardActiveStates` 挡掉。现在走真正的"停止 → 等状态离开 Running/Stopping → 启动"。
+- **端口允许空串**：清空端口再保存会写下 `server-port=`，端口占用统计随之漏掉该实例，
+  新建实例会撞端口。空串现在被拒绝。
+- **幻影实例**：备份/恢复用的 `restore_tmp_*` / `restore_old_*` 目录里有 jar，会被目录
+  扫描当成实例并写进 JSON；现在扫描跳过隐藏目录与 `restore_` 前缀。
+- **路由参数做 URL 编码**：实例 id 在目录扫描恢复路径下等于目录名，含 `#` 时会被当成
+  fragment 截断，实例详情页一闪即退。
+- **Lint**：去掉 `liquidGlassLensSafe` 上与实现（内部已自守卫）矛盾的 `@RequiresApi`，
+  它在调用点被误报成 NewApi error。
+
+### Removed（构建内）
+- **液态玻璃从软件构建中彻底移除**（**代码完整保留**，随时可接回）：
+  - 设置页删掉整个「液态玻璃」分区（玻璃模式 / 原生模糊 / 玻璃强度）与两个对话框，
+    顶部分类条从 7 个分区变回 6 个（外观 / 背景图 / 存储 / Java / 后台 / 关于）；
+  - 「主题样式」里不再出现 GLASS 选项（连那条"已封锁"提示一起删掉），
+    外观分区副标题里残留的「玻璃强度」也清了；
+  - `AppRoot` 底栏的玻璃链改为**编译期常量** `isGlass = false`。这一点是关键：
+    原来写的是 `LocalAppTheme.current == GLASS`，R8 无法证明它恒假，于是整条玻璃链
+    （`glassBackdropBlur` / `liquidGlassLensSafe`、`theme/blur/` 与 `theme/shader/` 两个包、
+    `LiquidGlassEffect.kt` 里的 shader）都因"运行时可能可达"而被打进 APK；
+    写成常量后编译器直接常量折叠，全部剥离。
+  - 仓库里保留未引用的：`ui/theme/LiquidGlassEffect.kt`、`theme/blur/`、`theme/shader/`、
+    `GlassMode`/`glassParams`/`LocalGlassMode` 等令牌、`SettingsPrefs` 的玻璃项、
+    `AppThemeMode.GLASS` 枚举与玻璃配色分支，以及各处说明性注释。
+  - **实测验证**：对 release dex 搜玻璃相关的**字符串字面量**（R8 会重命名类/方法，
+    类名不可靠）——`cornerRadii` 3→0、`refractionHeight` 4→0、`refractionAmount` 3→0、
+    `depthEffect` 3→0、`KazeGlass` 2→0、`uniform`（shader 源码）6→0，全部归零。
+
+---
+
+## [0.3.0] — 2026-09-25
+
+> 这一版把界面整体重做到 Material 3 Expressive，并修掉一批「真机根本跑不起来」的问题。
+> 在这之前，**v0.2.0 在任何 arm64 真机**上都部署不了环境——四个缺陷叠在一起，而模拟器是
+> x86_64 + houdini，跑 proot 直接段错误，所以这些问题在开发环境里从未暴露。
+
+### Added
+- **设置页顶部分类条**：7 个分区（外观 / 玻璃 / 背景图 / 存储 / Java / 后台 / 关于）横向排列、
+  固定在顶部；点击平滑滚到对应分区，滚动时自动高亮当前分区并把它滚进可视范围。
+  分区偏移用 `onGloballyPositioned` 实测而非写死下标（条目高度随文案换行变化，
+  Java 分区条目数还取决于已安装版本数）。
+- **Java 安装情况自动检测**：扫描 rootfs 的 `usr/lib/jvm`，优先读 `release` 文件里的
+  `JAVA_VERSION`（权威），读不到再从目录名解析，因此 apt 装的、Adoptium 解压的、
+  以及标准列表之外的版本都能认出来；进设置页时自动重新检测，行内显示确切版本
+  （如「已安装 · 17.0.20.1」）。
+
+### Changed
+- **界面重构为 Material 3 Expressive**。设计不是手写的：用 [M3E Canvas](https://github.com/lnkiai/m3e-canvas)
+  在代码里构造画布文档、跑它自己的 prompt 引擎导出 9 屏设计稿，再据此重做界面。
+  设计源（整包 prompt、逐屏 prompt、画布 JSON、可直接在浏览器打开的分享链接、生成脚本）
+  全部入库于 [docs/m3e](docs/m3e/)。
+  - 新增 `ui/theme/Expressive.kt`：官方形状 / 动效 / 排版令牌。本项目锁在 Compose BOM 2024.12.01
+    （material3 1.3.1，**没有** Expressive API），所以按 androidx token 落常量 —— 6 组 spring、
+    缓动曲线与时长、Expressive 圆角阶（卡片 20dp / 对话框 28dp / 全圆按钮）、
+    强调字阶（15 个字阶的 size 与 lineHeight 不变，只提字重与字距）。
+  - 新增 `ui/components/M3EComponents.kt`：Expressive 版式组件层（卡片三变体、72dp 列表项、
+    相连列表 28/8dp 圆角、屏幕头、状态胶囊、指标块、分段选择）。可点组件统一带涟漪与轻微缩小反馈。
+  - 新增 `ui/components/LoadingIndicator.kt` + `LoadingShapes.kt`：官方「会变形的」加载指示器。
+    7 个形状取自 Material Design 形状资产，每 650ms 变一次（一个循环 4.5s），变形按官方的
+    0.6/200 弹簧回落（峰值过冲约 9%，用解析式而不是 Animatable —— 形状序号是跳变目标，
+    有限动画追不准，也会让 Compose 测试等不到空闲），旋转按 50°+90°/形 的模型并补掉循环余量，
+    使跨形不跳。它同时接管了原来的「状态球」：运行中常速、启动中加速、停止时定格成单个形状。
+  - 新增 `ui/components/WavyProgress.kt`：官方波浪形线性进度条（容器 10dp、波幅 3dp、波长 40/20dp，
+    二次贝塞尔而非正弦），部署与安装进度改用它。
+  - 删除旧设计层：`BackgroundCard.kt`（整页大卡框架，重构后已无任何调用）、
+    `StatusOrb` 的自绘圆环/玻璃球（其职责由形状变化指示器接管，`StatusTone` 保留在
+    `StatusTone.kt`），以及 `Theme.kt` 里只服务于它们的 `cardColor/cardShape/cardTitleColor/
+    itemColor/serverItemBorderColor` 等助手。主页的实例选择从下拉菜单改为「点卡片展开」，
+    「运行概况」并入实例卡正文。
+  - 新增 `LoadingShapesTest`（7 形的点数一致 / 归一化居中 / 等弧长重采样 / 插值不外溢与不塌缩）
+    与 `ExpressiveComponentsTest`（组件层截图）；屏幕截图补上有实例时的版式与深色版。
+  - **常驻底栏（液态玻璃浮动胶囊）本次刻意不改**，仅确认它与新内容的相对位置。
+
+### Fixed
+- **真机上一部署环境就失败（四个叠加缺陷）**：
+  1. `targetSdk` 35 → **28**。Android 按 targetSdk 选 SELinux 域，≥30 落到 `untrusted_app`，
+     AOSP 用 `neverallow` 禁止 execve 应用私有目录中的文件（W^X），而 proot 必须执行 rootfs
+     里的 guest 二进制 → `execve("/usr/bin/sh"): Permission denied`。Termux / PojavLauncher
+     同样停在 28。
+  2. **usrmerge 兜底绑定根本不存在**：`repairRootfsLinks` 的注释声称"建不出符号链接时由
+     `buildProotCommand` 的 `-b` 绑定负责映射"，但绑定列表里从来没有 `/bin` `/lib` `/sbin`
+     → `'/bin/sh' not found`。现在真的补上绑定，并改用 `/usr/bin/sh`（真文件）而非 `/bin/sh`。
+  3. **`ensureMultiarchLinks` 在 arm64 上从不生效**：守卫检查的是硬编码的
+     `usr/lib/arm-linux-gnueabihf`，而 arm64 rootfs 里只有 `aarch64-linux-gnu` → 函数第一行
+     就 return，`usr/lib/ld-linux-aarch64.so.1` 等顶层 soname 软链**从未创建**，
+     dash 的 PT_INTERP 解析不到，proot 一步都跑不动。
+  4. **解压不还原 tar 权限**：只按路径给 `bin/` 与 `libexec/` 加 x，而 Java 创建的文件默认
+     0600 → `usr/lib` 下的共享库（含动态链接器）全都没有执行位，execve 返回 ENOENT。
+     现在解析 tar 头的 mode 字段并用 chmod 应用。
+  配套：`repairExecPermissions` 对**已经解压过**的 rootfs 幂等补齐执行位（老用户不必删掉重来）；
+  `dumpDiagnostics` 把 rootfs 关键文件的存在性 / 权限 / SELinux 上下文与两项 exec 实测写到
+  外部目录，真机没有 root 时也能直接取到（应用每次启动写一份）。
+- **启动瞬间整屏位移**：window insets 异步下发，首帧组合时 `WindowInsets.statusBars` 仍为 0，
+  内容先按"没有状态栏"布局（标题与状态栏图标重叠），insets 到达后整屏下移一个状态栏高度
+  （720p 实测 76px、持续约 0.45s）。现在 insets 就绪前只画背景不画前景。
+- **部署失败被静默吞掉**：阶段 3 的 `apt-get update` 结果无人查看，离线或源不可达时照样报
+  「环境已就绪」，之后所有 `apt-get install`（装 Java）都失败且重试无用。现在失败即明确报错，
+  重试会补做这一步（已解压的环境不会重复下载）。
+- **Java 明明装了却显示「未安装」**：判定用 `bin/java` 体积 > 1MB，而 OpenJDK 的 `bin/java`
+  只是约 100KB 的启动器（真正的大头是 `lib/server/libjvm.so`）→ 任何正常安装都被判成未安装。
+  服务端能跑是因为启动流程自己拼路径、没走这个检测，问题才被掩盖。
+- **实例摘要被断词截断**（`Java 21 · 4096 M…`）：`M3EListItem` 固定 72dp 高，而正文允许两行，
+  第二行被压掉。改为最小高度，长内容让行高自然增长。
+- **每种核心给独立图标与配色**：此前 7 种核心只有 3 种图标，Purpur / Spigot / Fabric /
+  Forge / NeoForge 全是同一个灰块，新建向导里连着 5 个一模一样的灰方块。
+- 控制台空状态用一个定格的灰椭圆表示"待命"，在空荡荡的日志区里读起来像渲染残渣，换成终端图标。
+- 「EULA 未接受」占掉约 55dp 把标题挤到不足 90dp，改为紧凑的警示图标（语义保留给读屏）；
+  玻璃设置页的长说明句被省略号截断，已精简。
+- 设置页「AMOLED 纯黑」在浅色模式下无效且无提示；AMOLED 覆盖漏了 `surfaceBright`
+  （M3 卡片底色用的就是它）。
+- CI：`android-actions/setup-android` 内部会安装 Google 已下架的旧 `tools` 包，必定失败；
+  去掉该 action 后 `sdkmanager` 不在 PATH，改为显式定位 runner 预装的 cmdline-tools。
+
+### Removed
+- **不再发布 `universal` 包**。安装包只出 arm64-v8a 与 armeabi-v7a 两个；
+  更新器的选包逻辑同步改造（精确后缀 → 名字含本机架构 → 旧命名 → universal → 单个安全包），
+  **任何情况下都不会把别的架构的包发给用户**，并补了 8 个针对性测试。
+- v7a（armeabi-v7a）包标记为 **experimental**：在真机上验证得少，请优先用 arm64 包。
+
+---
+
+## [0.2.0] — 2026-09-11 · 替换构建 2026-09-12
+
+> 本版本为**替换构建**（2026-09-12）：0.2.0 已发布的安装包替换为含完整审计修复的构建，
+> 版本号与签名不变，可直接覆盖升级。
+
+> ⚠️ **本版更换了签名密钥**：旧版（≤ v0.1.2）用公开的 Android 调试密钥签名，本版起改用正式发布密钥。
+> Android 不允许签名不同的包互相覆盖，**安装前必须先卸载旧版**（实例与存档在外部存储，不受影响）。
+
+### 替换构建新增（2026-09-12）
+
+主要内容是**一轮系统性的交互逻辑审计与修复**：四路并行审计（新建向导 / 实例启停与控制台 /
+设置主题更新与环境 / 导航骨架与横切）后逐条复核。
+
+#### Added
+- **Forge / NeoForge 支持启动**：补齐 `--installServer` 安装步骤。现代版（Forge 1.17+ / NeoForge）
+  用 `@user_jvm_args.txt` + `@unix_args.txt`，旧版（≤ 1.16.5）用 `-jar forge-*.jar`，两者都追加 `nogui`。
+  是否已安装以"启动入口是否存在"判断，避免每次启动重装。
+- **核心构建 / 加载器选择**：Paper 可选 build、Fabric 可选 loader（都只列稳定项）；
+  没有构建列表的核心自动隐藏该入口，不给假选项。
+- **安装时的服务器设置**：端口（留空自动分配）、最大玩家数、正版验证、默认游戏模式，
+  创建时写入 `server.properties`。
+- **EULA 安装时显式勾选**，未同意不允许创建；进入配置页时按「核心-版本」自动填可改的实例名。
+- **CI**：推送与 PR 自动跑单元测试并产出界面截图。
+- **Roborazzi 截图测试**：组件级 + 屏幕级，纯 JVM 渲染，不需要模拟器或真机。
+
+#### Fixed
+- **实例名可逃出实例根目录（删库级）**：`.` 与 `..` 不含被替换的非法字符，会被原样用作目录名
+  → `File(instancesRoot(), "..")` 解析到实例根的**父目录**。删除这种实例时 `deleteRecursively()`
+  会清空全部实例、世界存档与 `instances.json`。现在净化首尾点号并用 canonicalPath 断言不越界。
+- **同名实例复用同一目录**：向导默认名是「核心-版本」，不改名连续建两次会落到同一目录，
+  第二条的 jar 覆盖第一条、新建时的属性覆盖项还会改写第一条的 `server.properties`。
+- **Fabric 永远创建不了**：核心 jar 校验下限是 1MB，而 Fabric 官方 server launcher 实测仅
+  181,840 字节 → 每次下载都被判非法、删文件重试，最终报"所有源不可用"。
+- **Spigot 永远创建不了**：`download.getbukkit.org` 已 NXDOMAIN，换到仍在服务的 `cdn.getbukkit.org`。
+- **Paper 版本类型判定永久失效**：v3 API 的 version 对象没有 `releaseChannel` 字段（读取恒为 null）
+  → 66 个版本全判正式版，12 个 rc/pre 混入；叠加排序缺陷导致「正式版」筛选第一行是候选版。
+  改为按版本号预发布标记判类型，并让正式版排在预发布版之前。
+- **导入 jar 100% 失败且会删掉用户文件**：调用方已把文件拷进实例目录，`importJar` 又建同名目录并
+  `copyTo(overwrite=true)` → 先删目标（=删源）→ 抛异常 → catch 再 `deleteRecursively()`。
+  另外复制在主线程（几十 MB 的 jar 会 ANR）、失败被静默吞掉、Toast 在 IO 线程调用会崩。
+- **Android 8.0–10 点「选择目录」崩溃**：`Environment.isExternalStorageManager()` 是 API 30+ 的方法
+  而 minSdk 27，且不在任何 try 内（`NoSuchMethodError` 属 Error）。11 以下改走存储权限申请。
+- **按返回键退出会取消进行中的部署/下载/启动**：这些长任务原本在 `viewModelScope`（绑 Activity）里，
+  与"前台服务守护、后台不被打断"的承诺相反。改用应用级作用域，并单独放行 `CancellationException`
+  （此前会被记成"启动失败"）。
+- **强杀只杀 proot 宿主**：直接 `destroyForcibly()` 使 proot 来不及执行 `--kill-on-exit` 清理，
+  guest 里的 java 会脱离继续跑（界面显示已停止、实际仍占着端口与世界文件）。改为先 SIGTERM。
+- **启动期间没有任何停止入口**：部署 / 装 Java / 下载核心 / Forge 安装可能几分钟，此前按钮全是禁用态，
+  用户只能删掉实例。现在 busy 时三个页面都显示「停止 / 取消启动」，并补齐了启动流程的取消检查点。
+- **删除"正在启动"的实例**会与仍在写盘的安装器抢目录（目录被重建、旧 jar 被当成新实例"复活"）
+  → 未停稳时拒绝删除并提示。
+- **备份恢复可能把新旧数据一起删掉**：换入失败分支的条件不完整，失败期间目录被并发重建时会跳过回滚，
+  随后删除旧目录、`finally` 又删临时目录。
+- **部署失败后"环境已就绪"短路**：rootfs 解压完即视为就绪，阶段 3（apt 初始化）永远不会补做
+  → 之后所有 apt 安装 Java 都失败且重试无用。
+- **控制台**：清除只清 UI 不清缓冲（切走再回来整段复活）；自动跟随在 2000 行上限后彻底失效；
+  `\r` 覆盖式进度行在实时视图仍逐行刷屏。
+- **自动重启死锁**：先把状态置 Starting 再调 `start()`，被自身防重入拦下 → 永不重启且状态永久卡住。
+- 运行时长在"停止→再启动"后恒显示 0 秒；导入的自定义核心（Velocity/BungeeCord）永久卡在"首次启动"；
+  卸载正在被运行实例使用的 Java；主页当前实例与 `serverState` 不同源导致运行中却显示「启动服务端」。
+- **界面**：状态球 `size` 参数从未生效（实际按 0×0 测量，首页完全不显示）；首页空状态与主按钮重复；
+  服务端卡片状态改为胶囊、「EULA 未接受」改为醒目警示条；主题预览两种主题看起来一样；
+  版本徽章改用真实版本号；输入框页面补键盘避让；状态栏图标跟随主题；状态球动画后台停止。
+- **换背景图不刷新**、**取色器 HEX 输入框打不进字**、**详情页未保存编辑被静默回滚**、
+  字体/语言变更重建 Activity 丢状态、更新弹窗忽略安装结果、自定义实例目录失效时静默回落。
+
+#### Security
+- **更新包补 SHA-256 完整性校验**：APK 更新包从 13 个第三方加速镜像下载，而校验只有
+  "体积 > 1MB 且以 PK 开头" —— 任一镜像被控制即可投毒，应用还会引导用户安装。
+  改用 GitHub asset 的 `digest`（取自直连的 api.github.com，不经过镜像）做比对。
+- 核心 jar 增加 ZIP 魔数校验；卸载/安装类操作的连点竞态统一加了同步守卫。
+
+### 0.2.0 首发内容（2026-09-11）
+
+> ⚠️ **本版更换了签名密钥**：旧版（≤ v0.1.2）用公开的 Android 调试密钥签名，本版起改用正式发布密钥。
+> Android 不允许签名不同的包互相覆盖，**安装前必须先卸载旧版**（实例与存档在外部存储，不受影响）。
+
+#### Security
+- **发布签名密钥轮换**：`release` 构建类型此前未配置 `signingConfig`，实际发布的是用仓库内公开
+  `debug.keystore`（口令明文写在构建脚本里）签名的包 —— 任何人都能伪造一个「签名匹配、版本号更高」的 APK
+  被系统当作合法升级安装。现在改为从环境变量 / `local.properties` 读取正式密钥，取不到时产出未签名包
+  而**不会**回退到 debug 密钥。轮换步骤与发版检查清单见 [`docs/RELEASE-SIGNING.md`](docs/RELEASE-SIGNING.md)。
+- **下载校验补强**：vanilla 服务端下载接上官方清单里的 SHA-1（此前被丢弃）；proot 运行时下载补 gzip
+  魔数校验（此前零校验即解压并执行）；`Downloader.validate` 取消「默认放行」的兜底值，强制调用方显式校验。
+- `.gitignore` 移除 `!release-keystore.jks` 白名单，避免发布密钥被误提交。
+
+#### Fixed
+- **删除实例会清空其它实例的备份**：备份原先全部平铺在所有实例共享的 `backups/` 目录，而删除实例时对该
+  目录整体递归删除。现在每个实例的备份各占独立目录，删除只影响自己；旧版留下的备份仍可正常列出与恢复。
+- **`survival` 实例会列出 `survival2` 的备份**：列表匹配由实例名前缀改为完整前缀（带分隔符）。
+- **服务端可能停不掉**：在「部署 / 首次启动」阶段点停止，旧实现会让界面显示已停止、而 java 进程仍在后台
+  运行且无法再停止（占用端口与内存）。现在会置取消标志、由启动流程自行收尾。
+- **重新启动实例时误杀新进程**：优雅停止的 10 秒强杀逻辑读取的是「当前 slot 的进程」而非启动时的那个，
+  且遗留任务未取消；现在捕获当时进程并在重启前取消旧任务。
+- **首启探测进程失控**：探测进程此前未登记进实例会话，用户点停止时既不被强杀路径覆盖、也无人持有引用。
+- **并发部署超时判断失效**：`setup()` 的超时分支因标志位恒为 false 而不可达，真卡住时界面永远停在「部署中」。
+- **命令拼接转义不完整**：只对含空格的参数加引号，`server(1).jar`、带引号或 `&` 的文件名会导致服务端
+  启动即退出且没有可读提示。改为完整 POSIX 单引号转义。
+- **控制台切换到运行中的实例显示空白**：实时流不带 replay，而用于回填历史的 `snapshot()` 定义了却无人调用。
+- **控制台高负载下静默丢日志**：缓冲区溢出策略改为丢弃最旧，保证最新输出一定到达界面。
+- **聊天内容被误判为玩家事件**：玩家说一句 "Alex joined the game" 会凭空多出一个在线玩家；聊天含
+  `error`/`warn` 也会整行染色。两者现均按聊天行排除。
+- **日志轮转上限失效**：改名失败时仍继续追加，8MB 上限形同虚设并可能撑满存储；现在检查改名结果并退化为截断。
+- **版本列表请求无超时**：网络卡住时界面永久转圈且取消不掉（同步 IO 不可中断）；补上连接与读取超时，
+  并修掉重定向缺少 Location 时的连接泄漏。
+- **设置页显示错误版本号**：硬编码 `v0.1.0`，与 `versionName` 长期不一致；改为读 `BuildConfig.VERSION_NAME`。
+- **命令输入框 placeholder 闪烁/消失**：停止时输入框仍可输入（发送按钮禁用），残留文字顶掉 placeholder；运行/停止切换时 placeholder 文字不一致。修复：停止时 `enabled=false` 并清空 input 残留，placeholder 恒定显示「服务端运行后可输入命令」；运行时显示「输入命令（stop / op 玩家名 / say …）」。
+- **命令输入框键盘遮挡**：键盘弹出时输入框距键盘上方 96dp（底栏占位未收起）。修复：`WindowInsets.isImeVisible` 监听键盘状态，键盘可见时自动去掉 96dp 底部 padding，输入框紧贴输入法上方。
+
+#### Changed
+- **开启 R8 代码压缩与资源裁剪**（`isMinifyEnabled` + `isShrinkResources`）。应用实际只用到 28 个图标，
+  此前却把整套 Material 图标打进包（dex 内 5.7 万处 `material/icons/` 引用）：arm64 release 的 dex
+  由 16.75 MB 降至 1.24 MB，三个架构的安装包分别缩小约 40% / 42% / 29%。
+- **Forge / NeoForge 的失败提示改为明确说明**：这两类核心下载到的是 `-installer.jar`，需先执行
+  `--installServer` 生成运行环境，该步骤尚未实现。此前只提示「没有服务端核心 jar」，让用户对着已存在的
+  installer 无从判断。**该功能仍不可用**，请使用 Paper / Purpur / Fabric 或「导入 jar」。
+- 备份导入的文件名做了路径穿越防护。
+
+#### Removed
+- 删除 `ui/theme/blur/**`（22 个文件、4881 行）与 `ui/theme/shader/**`（2 个文件、178 行）：整包引入的
+  compose-miuix-ui 实现，包外唯一引用是 `AppRoot.kt` 中 5 行从未被调用的 import。实际生效的玻璃效果走
+  `LiquidGlassEffect` + `util/StackBlur.java`。
+
+#### Added
+- **单元测试**：25 个纯 JVM 测试（无需设备）—— 版本比较（含「同号正式版 > 预发布」的预发布段语义）、
+  `server.properties` 读写与端口分配、控制台解析的聊天误判防护。
+- [`docs/RELEASE-SIGNING.md`](docs/RELEASE-SIGNING.md)：发布密钥轮换步骤与发版检查清单。
+- **控制台「复制日志」按钮**：右上角「保存日志」左侧新增复制按钮。复制内容改为控制台内存流（与原屏幕所见一致），不再读文件；空日志 Toast「暂无日志」。
+- **保存日志同步修改**：「保存日志」导出逻辑改为导出控制台内存流内容（与复制、屏幕三者一致）。
+
+#### 体积对比（开启 R8 后）
+
+| 架构 | 0.2.0 | v0.1.2 | 降幅 |
+|---|---|---|---|
+| arm64-v8a | **30.6 MB** | 51.0 MB | −40% |
+| armeabi-v7a | **27.7 MB** | 47.2 MB | −41% |
+| universal | **56.6 MB** | 79.8 MB | −29% |
+
+arm64 的 dex 由 16.75 MB 降至 1.24 MB。
+
+---
+
+## [0.1.2] — 2026-08-28
+
+### Fixed
+- **更新检查会下到装不上的包**：改为按设备架构挑下载地址。此前取 assets 里第一个 `.apk`，
+  armeabi-v7a 设备会拿到 arm64 包，下载完成后安装失败。选取顺序：
+  当前架构 → 旧命名兼容（`-arm64`）→ `universal` → 任意 apk（永远有 universal 兜底）。
+
+### Changed
+- `versionCode` 2 → 3。
+
+---
+
+## [0.1.1] — 2026-08-28
+
+### Added
+- **应用内更新检查**：走 GitHub Releases API，GitHub 原链 + 多个国内加速镜像测速择优下载，
+  经 FileProvider 调起系统安装器（新增 `UpdateChecker`、`UpdateInstaller`、`file_paths.xml`）。
+- **armeabi-v7a 支持**：补 `libtalloc.so`，32 位老设备可以安装运行（0.1.0 仅 arm64-v8a）。
+- **CHANGELOG.md**：采用 Keep a Changelog 格式，替代原先放在仓库里的 `MEMORY.md`（后者已移出仓库）。
+
+### Changed
+- **新建服务端流程重写**：筛选 + 实时搜索 + 版本列表全量展示；启动速度优化。
+- **空服自动暂停默认关闭**：默认模板写 `pause-when-empty-seconds=-1`，旧实例缺该键时自动补 -1
+  —— proot 下暂停唤醒会卡死，进而触发 Watchdog 崩溃循环。
+- 主题取色方案调整；背景图免裁剪；设置页版本徽章由硬编码 `v1.0.0` 修正为 `v0.1.0`。
+
+### Fixed
+- **24 项逻辑修复 + 备份/下载/UI 加固**，其中：
+  - 下载支持取消；端口分配同步；配置文件原子写（避免写一半掉电损坏）
+  - 停止等待与重启守卫；恢复备份守卫；导入 jar 补上结果反馈
+  - 键盘弹出时输入框悬浮在屏幕中部（`adjustNothing` 与 `imePadding` 双重压缩）
+  - 控制台输入框与底部导航栏重叠
+  - 版本检测失效
+
+---
+
+## [0.1.0] — 2026-08-18
+
+首发版本。
+
+### Added
+- **双主题系统**：`clear`（简洁面板）/ `glass`（液态玻璃）；跟随系统深浅色，Glass 双版明暗配色。
+- **自包含 Linux 环境**：proot + Ubuntu 24.04 rootfs 内置 arm64，无需 Root、无需 Termux，首次部署全程离线。
+- **Java 自动安装**：按 MC 版本推断（1.8–1.16.5→8 / 1.18–1.20.4→17 / ≥1.20.5→21 / 26.x→25），apt 按需安装/删除。
+- **EULA 全自动**：首次启动生成 eula.txt → 自动改写 `eula=true` → 重启，全程可视化三步指示。
+- **实时控制台**：日志逐行着色、自动滚动、命令输入（stop / op / say…）。
+- **服务端管理**：Vanilla / Paper / Purpur / Spigot / Fabric / Forge / NeoForge / 自定义 jar 导入，多实例独立目录与内存配置。
+- **附加组件**：插件（Paper）/ 模组（Fabric/Forge）支持，Modrinth CDN 下载。
+- **实例详情**：server.properties 编辑器（含「空服自动暂停」chips）、备份/恢复、导入/导出（SAF）。
+- **日志页**：运行日志（console-output.log）、服务器日志（latest.log）、崩溃报告三卡片。
+- **玩家管理**：ConsoleParser 解析 list 响应 + join/leave 事件 + OP/白名单/踢出快捷命令。
+- **设置页完整体系**：主题样式 / 主题模式 / 深色样式 / 颜色来源 / 取色风格（九种）/ 液态玻璃模式 / 背景图裁剪 / 图标与文字颜色（跟随主题/白/黑）。
+- **前置守护 Service**：`ServerGuardService` 前台保活，服务端运行期间保活、全部停止后自动退出。
+- **后台电池白名单**：首次启动服务端自动申请忽略电池优化，vivo 兜底引导。
+
+### Changed
+- **Paper/Purpur 预置原版 jar**：旧版 paperclip 下载目标为 `CWD/cache/<fileName>`（非 `versions/`），需 SHA256 匹配才跳过联网。修复 `ensureVanillaJar` 解析 jar 内 `META-INF/download-context`，预置到正确路径。
+- **Paperclip 版本解析**：paper 构建内部版本号与 mcVersion 可能不一致（paper-1.18.2-217.jar 的 version.json id=1.18.1）。新增 `paperclipVanillaVersion()` 读 version.json id。
+- **proot 回退**：APK 含 x86_64 lib 后模拟器安装只解压 x86_64 目录，arm64 lib 不落盘。新增 `extractNativeProot` 从 APK zip 提取 arm64-v8a。
+- **下载健壮化**：镜像返回 HTML 假 200 被当成功；修复：`probeFastest` 嗅探 1KB 排除 HTML；`RootfsJavaManager` 改 TUNA 目录页解析包名；`Downloader.download` 加 gzip 魔数+大小校验。
+- **rootfs 健康检查增强**：isReady 从仅查 dash 可读改为 dash+usr/bin/sh+usr/bin/apt-get 三者真实读取。
+- **设置页精简**：删除「Linux 环境」标题行+部署按钮+存放到外部存储开关+部署状态（环境部署已自动化）；主题模式/深色样式/颜色来源 Row→FlowRow 防窄屏挤压。
+- **背景图 UX**：选择背景图按钮常驻；遮罩默认 25（原 60 太低几乎不可见）；开关仅在已选背景图时显示。
+- **图标文字颜色三档**：跟随主题/白色/黑色，通过 `LocalFgColorMode` 覆盖中性前景角色；动态色容器上的文字不变。
+- **裁剪页 Android 15 适配**：CropImageActivity 强制 edge-to-edge 后状态栏显示图片色；修复：加 `windowOptOutEdgeToEdgeEnforcement` + 白状态栏。
+
+### Fixed
+- **M3 深色文字消失**：MaterialTheme 1.3.x 不提供 `LocalContentColor`（默认 Color.Black）→ 深色下所有默认文字渲染纯黑。修复：显式 `provide onBackground`。
+- **液态玻璃浅色不可见**：`BlendMode.Screen` 叠加在近白底上数学上不可见；修复浅色改用 SourceOver 直叠饱和色块。
+- **底栏 50% 透光**：M3 分支容器 alpha 0.95→0.5，滚动内容可透出。
+- **真机 rootfs 部署失败**：内部存储写入不稳定导致 rootfs 丢失；用户改外部存储后可正常。
+- **MuMu 安装后 nativeLibraryDir 无 libproot.so**：x86_64 首选设备仅解压 x86_64 目录；通过 `extractNativeProot` 回退解决。
+
+### Notes
+- **APK ABI 范围**：v0.1.0 起 `abiFilters += "arm64-v8a"`，仅支持 arm64（真机主流；MuMu x86_64 模拟器无法安装，需换 arm64 模拟器或真机）。
+- **构建命令**：需设 `GRADLE_USER_HOME` 指向 v3 缓存目录 + `TMP/TEMP` 指向工作区 `.tmp`。
+
+---
+
+## 历史版本（2026-08-14 ~ 2026-08-16 早期迭代）
+
+以下功能均已合并至 0.1.0：
+
+- 初始架构：多开会话（`ConcurrentHashMap<String, RuntimeSlot>`）、`ConsoleStream`、`ServerProperties`、`ModrinthApi`。
+- 设计系统：Zalith/FCL 版式移植（主页 LauncherScreen 风格、服务端 VersionsManageScreen 风格、控制台日志着色）。
+- 背景图裁剪：集成 CanHub Android-Image-Cropper 4.6.0（View 版，Activity 模式）。
+- 日志持久化：`slot.log` 同步写 `console-output.log`，8MB 轮转。
+- ServerGuardService 前台保活重构。
+- 配置/记忆体系：`AppViewModel`、`InstanceStore`、`SettingsPrefs`。
+
+---
+
+[Unreleased]: https://github.com/0Sakura721/Kaze-SLauncher/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/0Sakura721/Kaze-SLauncher/releases/tag/v0.2.0
+[0.1.2]: https://github.com/0Sakura721/Kaze-SLauncher/releases/tag/v0.1.2
+[0.1.1]: https://github.com/0Sakura721/Kaze-SLauncher/releases/tag/v0.1.1
+[0.1.0]: https://github.com/0Sakura721/Kaze-SLauncher/releases/tag/v0.1.0

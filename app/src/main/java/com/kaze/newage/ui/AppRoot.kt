@@ -1,0 +1,620 @@
+package com.kaze.newage.ui
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.kaze.newage.core.update.UpdateChecker
+import com.kaze.newage.core.update.UpdateInstaller
+import com.kaze.newage.ui.components.AppBackground
+import com.kaze.newage.ui.components.BackdropLayer
+import com.kaze.newage.ui.components.M3ELinearProgress
+import com.kaze.newage.ui.screens.AddonsScreen
+import com.kaze.newage.ui.screens.ContentScreen
+import com.kaze.newage.ui.screens.NetworkScreen
+import com.kaze.newage.ui.screens.AiScreen
+import com.kaze.newage.ui.screens.AiSettingsScreen
+import com.kaze.newage.ui.screens.ConsoleScreen
+import com.kaze.newage.ui.screens.DiagnosticsScreen
+import com.kaze.newage.ui.screens.HomeScreen
+import com.kaze.newage.ui.screens.InstanceDetailScreen
+import com.kaze.newage.ui.screens.LogsScreen
+import com.kaze.newage.ui.screens.NewServerScreen
+import com.kaze.newage.ui.screens.ServerScreen
+import com.kaze.newage.ui.screens.SettingsScreen
+import kotlinx.coroutines.launch
+import com.kaze.newage.ui.theme.AppThemeMode
+import com.kaze.newage.ui.theme.LocalAppTheme
+import com.kaze.newage.ui.theme.LocalGlassBlurEnabled
+import com.kaze.newage.ui.theme.LocalGlassIntensity
+import com.kaze.newage.ui.theme.LocalGlassMode
+import com.kaze.newage.ui.theme.glassBackdropBlur
+import com.kaze.newage.ui.theme.liquidGlassLensSafe
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
+import com.kaze.newage.core.i18n.LanguageState
+import com.kaze.newage.core.i18n.t
+import androidx.compose.ui.text.style.TextOverflow
+
+enum class Dest(
+    val route: String,
+    /**
+     * 标签的**中文原文**（不是译文）。
+     *
+     * 不能在枚举构造时调 t() —— 枚举是静态单例，只在类初始化时求值一次，
+     * 于是切换语言后底栏/标题栏的文案永远是启动时那一套（而且若启动时是英文，
+     * 后面切回中文也变不回来）。所以这里只存原文，取值一律走 [label]。
+     */
+    private val labelZh: String,
+    val icon: ImageVector,
+    val iconSelected: ImageVector,
+) {
+    Home("home", "主页", Icons.Outlined.Home, Icons.Filled.Home),
+    Server("server", "服务端", Icons.Outlined.Dns, Icons.Filled.Dns),
+    Console("console", "控制台", Icons.Outlined.Terminal, Icons.Filled.Terminal),
+    Settings("settings", "设置", Icons.Outlined.Settings, Icons.Filled.Settings),
+    ;
+
+    /** 当前语言下的标签（每次调用都查一次表，随语言切换即时生效） */
+    val label: String get() = t(labelZh)
+}
+
+@Composable
+fun AppRoot(viewModel: AppViewModel = viewModel()) {
+    // ── 语言切换的触发点 ──
+    // LanguageState.revision 是 mutableStateOf：读它 = 订阅它。语言一变，AppRoot 重组，
+    // 整棵树跟着重取 t()，界面立刻变成新语言（不需要重启 Activity）。
+    // 只读不用的变量会被编译器警告「never used」，所以显式取值后交给 showBottomBar 的
+    // 同一行做一次无害的引用（见下），避免 @Suppress。
+    val languageRevision = LanguageState.revision
+
+    val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val uiPrefs = viewModel.uiPrefs
+    // languageRevision 参与 key：语言变化时 Dest.label 需要被重新读取
+    val showBottomBar = remember(currentRoute, languageRevision) {
+        Dest.entries.any { it.route == currentRoute }
+    }
+
+    /**
+     * 所有"切换主页面"都走这一条。
+     *
+     * 底栏一直用的是「popUpTo(起始页){saveState} + launchSingleTop + restoreState」，
+     * 但首页那个控制台快捷入口原本是**裸 `navigate(route)`** —— 它推进去的条目和起始页
+     * 之间没有 saveState 关系，之后底栏再切回主页就不生效了（实测：首页点控制台图标后
+     * 切不回主页，语义树里内容仍是控制台）。混用两种跳转是根因，所以统一到这里。
+     */
+    val navigateTab: (String) -> Unit = { route ->
+        navController.navigate(route) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
+    // ── 启动自动检查更新（默认开；通道默认预览版，设置页可改）──
+    // 状态全部交给 ViewModel：更新包几十 MB、下载要几分钟，挂在组合上的话
+    // 离开设置页或转屏就会静默中止（见 AppUpdateState 的说明）。
+    val appContext = LocalContext.current.applicationContext
+    val updateState by viewModel.appUpdate.collectAsStateWithLifecycle()
+    val updateInfo = (updateState as? AppUpdateState.Found)?.info
+    val updateDownloading = (updateState as? AppUpdateState.Downloading)
+    var updateChecked by rememberSaveable { mutableStateOf(false) }
+    // 用户点过「以后再说」：本次启动不再弹。否则清状态时若还留着 Error，
+    // 下一次任意重组都会把已经关掉的弹窗重新弹出来（过期的失败提示）
+    var updateDialogDismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!updateChecked) {
+            updateChecked = true
+            viewModel.checkUpdateOnStart(uiPrefs.autoUpdate.value)
+        }
+    }
+
+    AppBackground(prefs = uiPrefs) {
+        // ── 首帧守卫：window insets 是异步下发的 ──
+        // 首帧组合时 WindowInsets.statusBars 仍为 0，内容会先按"没有状态栏"布局
+        // （标题与状态栏图标重叠），等 insets 到达后整屏下移一个状态栏高度。
+        // 真机录屏实测：720p 下位移 76px，持续约 0.45s —— 观感就是"启动瞬间跳一下"。
+        // 处理：insets 就绪前只画背景、不画前景（通常只差 1–2 帧，肉眼不可见）。
+        // 兜底：真正没有状态栏的设备（全屏/车机）永远拿不到 inset，超时后照常渲染。
+        val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        var insetsTimedOut by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            delay(300)
+            insetsTimedOut = true
+        }
+        val contentVisible = statusBarTop > 0.dp || insetsTimedOut
+
+        // 覆盖式布局（不用 Scaffold 的 bottomBar 预留位）：
+        // 内容全屏滚动，可以"穿过"常驻底栏——滚动中的文字/卡片经 hazeSource 进入模糊源，
+        // 被底栏的液态玻璃实时映射（模糊的字）
+        Box(Modifier.fillMaxSize()) {
+            // 内容层录制进 GraphicsLayer：软件模糊从该层栅格化+降采样放大
+            //（vivo Android 16：RenderEffect blur 不渲染——Haze、自研 renderEffect、
+            //   Miuix 高斯 shader 均无效；软件降采样是真机唯一已验证生效的路径）
+            val contentLayer = rememberGraphicsLayer()
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .drawWithContent {
+                        contentLayer.record {
+                            this@drawWithContent.drawContent()
+                        }
+                        drawLayer(contentLayer)
+                    }
+            ) {
+                BackdropLayer(prefs = uiPrefs, modifier = Modifier.fillMaxSize())
+                NavHost(
+                    navController = navController,
+                    startDestination = Dest.Home.route,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // insets 就绪前不画（布局照常，只是不可见）——见上方首帧守卫
+                        .graphicsLayer { alpha = if (contentVisible) 1f else 0f }
+                        .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()),
+                    // 无底部留白：内容（含各页自带底部空白）可滚过常驻栏，滚动中充分透出
+                ) {
+                composable(Dest.Home.route) {
+                    HomeScreen(
+                        viewModel,
+                        // 资源中心不是底栏 tab：走普通 navigate，别套 navigateTab 的
+                        // popUpTo/restoreState（那套是给四个主页面互相切换用的）
+                        onNavigate = { route ->
+                            if (route == "content" || route == "network") navController.navigate(route) else navigateTab(route)
+                        },
+                        // 首页大按钮在"没有实例"时显示的是「新建服务端」，
+                        // 就必须真的进新建向导——此前跳到服务端列表页，用户还得再点一次「新建」
+                        onNewServer = { navController.navigate("server/new") },
+                    )
+                }
+                composable(Dest.Server.route) {
+                    ServerScreen(
+                        viewModel,
+                        onOpenInstance = { inst -> navController.navigate("instance/${android.net.Uri.encode(inst.id)}") },
+                        onNewServer = { navController.navigate("server/new") },
+                        // 与 ConsoleScreen 那处同一条路由：AI 入口独立于实例是否存在
+                        onOpenAi = { navController.navigate("ai") },
+                    )
+                }
+                composable("server/new") {
+                    NewServerScreen(
+                        viewModel = viewModel,
+                        // 只在向导仍处于栈顶时才回退。
+                        // 向导的 onExit 会在**下载完成时**被调用，而下载是跨页面继续跑的：
+                        // 用户完全可能点了「下载并创建」后按返回离开向导，去干别的。此时再无条件
+                        // popBackStack() 就会把用户当前所在的页面弹掉（表现为"下载完自己退了一层"）。
+                        onBack = {
+                            if (navController.currentDestination?.route == "server/new") {
+                                navController.popBackStack()
+                            }
+                        },
+                    )
+                }
+                composable(Dest.Console.route) {
+                    ConsoleScreen(viewModel, onOpenAi = { navController.navigate("ai") })
+                }
+                composable("ai") {
+                    AiScreen(
+                        viewModel = viewModel,
+                        onBack = { navController.popBackStack() },
+                        onOpenSettings = { navController.navigate("ai/settings") },
+                    )
+                }
+                composable("ai/settings") {
+                    AiSettingsScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+                }
+                // 公网与远程：Tailscale / 樱花映射 / 自建 frp / 远程管理面板
+                composable("network") {
+                    NetworkScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+                }                // 资源中心：模组/插件/资源包/地图/基岩版（从主页的「资源」入口进入）
+                composable("content") {
+                    ContentScreen(
+                        viewModel = viewModel,
+                        onBack = { navController.popBackStack() },
+                        onOpenServers = { navigateTab(Dest.Server.route) },
+                    )
+                }
+                composable(Dest.Settings.route) {
+                    SettingsScreen(
+                        viewModel = viewModel,
+                        onOpenDiagnostics = { navController.navigate("diagnostics") },
+                    )
+                }
+                composable("diagnostics") {
+                    DiagnosticsScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+                }
+                composable("instance/{instanceId}") { entry ->
+                    val id = entry.arguments?.getString("instanceId") ?: ""
+                    InstanceDetailScreen(
+                        viewModel = viewModel,
+                        instanceId = id,
+                        onBack = { navController.popBackStack() },
+                        onOpenAddons = { kind ->
+                            navController.navigate("instance/${android.net.Uri.encode(id)}/addons/${kind.name.lowercase()}")
+                        },
+                        onOpenLogs = { navController.navigate("instance/${android.net.Uri.encode(id)}/logs") },
+                    )
+                }
+                composable("instance/{instanceId}/logs") { entry ->
+                    val id = entry.arguments?.getString("instanceId") ?: ""
+                    LogsScreen(
+                        viewModel = viewModel,
+                        instanceId = id,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+                composable("instance/{instanceId}/addons/{kind}") { entry ->
+                    val id = entry.arguments?.getString("instanceId") ?: ""
+                    val kindName = entry.arguments?.getString("kind") ?: ""
+                    AddonsScreen(
+                        viewModel = viewModel,
+                        instanceId = id,
+                        kind = if (kindName == "mod") com.kaze.newage.core.addons.AddonKind.MOD
+                        else com.kaze.newage.core.addons.AddonKind.PLUGIN,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+                }
+            }
+            // 常驻底栏：覆盖在内容之上（内容可滚动穿过，被液态玻璃模糊映射）
+            if (showBottomBar) {
+                // 渐隐的落点色：用主题背景色，深色下接近页面底色
+                val scrimColor = com.kaze.newage.ui.theme.backgroundColor()
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        // 同上：底栏也依赖 navigationBars inset，首帧会跳，一起门控
+                        .graphicsLayer { alpha = if (contentVisible) 1f else 0f }
+                        // 底栏上方加一层向上渐隐：滚过来的内容"淡出"，
+                        // 而不是被浮起的胶囊硬切一半（设置页的 chips 就出现过这种观感）。
+                        // 用 drawBehind 绘制，不参与布局，底栏尺寸不变。
+                        .drawBehind {
+                            val fadePx = 44.dp.toPx()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    1f to scrimColor,
+                                    startY = -fadePx,
+                                    endY = size.height * 0.62f,
+                                ),
+                                topLeft = Offset(0f, -fadePx),
+                                size = Size(size.width, size.height + fadePx),
+                            )
+                        }
+                ) {
+                    LiquidGlassNavBar(
+                        currentRoute = currentRoute,
+                        contentLayer = contentLayer,
+                        onNavigate = { dest -> navigateTab(dest.route) },
+                    )
+                }
+            }
+        }
+
+        // ── 启动自动检查：发现新版本弹窗（下载阶段沿用同一个弹窗显示进度）──
+        val releaseInfo = updateInfo ?: updateDownloading?.info
+        if (releaseInfo != null && !updateDialogDismissed) {
+            val busy = updateDownloading != null
+            val cancelled = busy && viewModel.updateCancelRequestedFlag()
+            AlertDialog(
+                // 下载中不锁死弹窗：点击外部 = 请求取消（下载会中止，断点保留）
+                onDismissRequest = {
+                    if (busy) {
+                        viewModel.cancelUpdateDownload()
+                    } else {
+                        updateDialogDismissed = true
+                        viewModel.resetUpdateState()
+                    }
+                },
+                title = { Text("发现新版本 ${releaseInfo.tag}") },
+                text = {
+                    Column {
+                        // 发布日期：更新判定现在以它为准（版本号不再参与比较），亮出来让用户可核对
+                        if (releaseInfo.publishedAtText.isNotBlank()) {
+                            Text(
+                                t("发布于 %s", releaseInfo.publishedAtText),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (releaseInfo.body.isNotBlank()) {
+                            // 原来直接把 info.body 丢进 Text：用户看到的是**原始 Markdown**
+                            // （## / > / ** / 表格竖线），而且 take(400) 把正文截断，后半截看不到。
+                            // 现在转成可读纯文本，并给固定高度 + 可滚动 —— 全文都能翻。
+                            Text(
+                                remember(releaseInfo.tag, releaseInfo.body) {
+                                    com.kaze.newage.core.update.ReleaseNotes
+                                        .toPlainText(releaseInfo.body, dropTitle = releaseInfo.tag)
+                                        .ifBlank { releaseInfo.body }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .heightIn(max = 340.dp)
+                                    .verticalScroll(rememberScrollState()),
+                            )
+                        }
+                        updateDownloading?.message?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                        // 下载失败时不能静默收弹窗（否则用户以为更新完成了）
+                        (updateState as? AppUpdateState.Error)?.let {
+                            Text(
+                                it.msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                        if (busy) {
+                            // 有进度就显示**确定**进度条，没有（探测/拼装/校验阶段）
+                            // 才退回不确定的滚动条 —— 一直转圈会让人以为卡死了
+                            val percent = updateDownloading?.progress ?: 0f
+                            if (percent > 0f) {
+                                M3ELinearProgress(
+                                    progress = percent,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                )
+                            } else {
+                                M3ELinearProgress(progress = null, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { viewModel.downloadAndInstallUpdate(releaseInfo) },
+                        enabled = !busy,
+                    ) {
+                        Text(if (busy) t("下载中…") else t("下载并安装"))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            // 下载中 = 取消（立刻给反馈：只把标志置真的话，用户点了取消、
+                            // 界面几秒内毫无变化，观感就是"取消不了"，真机反馈过）
+                            if (busy) {
+                                viewModel.cancelUpdateDownload()
+                            } else {
+                                updateDialogDismissed = true
+                                viewModel.resetUpdateState()
+                            }
+                        },
+                        enabled = !cancelled,
+                    ) {
+                        Text(
+                            when {
+                                cancelled -> t("正在取消…")
+                                busy -> t("取消下载")
+                                else -> t("以后再说")
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * 液态玻璃浮动胶囊底栏（Miuix IosLiquidGlassNavigationBar 版式，
+ * Miuix/AndroidLiquidGlass Apache-2.0，已记 NOTICES）：
+ *  - 24dp 边距悬浮圆胶囊（64dp 高）+ 10dp 投影
+ *  - 玻璃链：Haze 背景模糊 + vibrancy 饱和度 1.5 + Kyant0 圆角矩形折射透镜（24dp/24dp）
+ *  - 容器：surfaceContainer alpha 0.4（模糊启用时）
+ *  - 选中项：主色图标 + 标签
+ */
+@Composable
+private fun LiquidGlassNavBar(
+    currentRoute: String?,
+    contentLayer: androidx.compose.ui.graphics.layer.GraphicsLayer,
+    onNavigate: (Dest) -> Unit,
+) {
+    // ⚠️ 液态玻璃已从**构建**中移除（代码保留，随时可接回）。
+    //
+    // 这里刻意写成编译期常量 false，而不是 `LocalAppTheme.current == GLASS`：
+    // 后者 R8 无法证明恒假，整条玻璃链（glassBackdropBlur / liquidGlassLensSafe /
+    // theme/blur/ + theme/shader/ 两个包 + LiquidGlassEffect.kt）就会因为"运行时可能可达"
+    // 而被打进 APK。写成常量后编译器直接常量折叠，那些类与它依赖的 shader 全部被剥离。
+    // 要恢复液态玻璃：把下面两行改回原来的读取，并把设置页的主题选项与玻璃分区加回来。
+    val isGlass = false
+    val blurEnabled = false
+    val density = LocalDensity.current
+    val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val pillShape = CircleShape
+    // 玻璃链只属于液态玻璃主题；M3 主题底栏保持原样式（不透明表面板，不参与模糊映射）
+    val glassActive = isGlass && blurEnabled
+    // Miuix（HyperOS）：底栏是一块**实心**的浮起胶囊——白底（深色下 #1C1C1E）、
+    // 12% 不透明容差、0.5dp 描边、几乎没有投影。原来 M3 的 50% 半透明底在灰白分组底上
+    // 会透出下面的卡片边线，HyperOS 的底栏是完全遮住内容的。
+    val isMiuix = LocalAppTheme.current == AppThemeMode.MIUIX
+    val containerColor = when {
+        isGlass -> {
+            // 0.12 极淡表面：折射与模糊主导"液态"观感，磨砂太厚会盖住折射弯曲
+            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.12f)
+        }
+        isMiuix -> MaterialTheme.colorScheme.surface
+        else -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f)
+    }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp)
+            .padding(bottom = 8.dp + navInset),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                // HyperOS 的底栏略矮（56dp），选中项用一块浅蓝圆角底而不是只有变色图标
+                .height(if (isMiuix) 56.dp else 64.dp)
+                .shadow(if (isMiuix) 6.dp else 10.dp, pillShape, clip = false)
+                .clip(pillShape)
+                .then(
+                    if (isMiuix) {
+                        Modifier.border(
+                            BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                            pillShape,
+                        )
+                    } else Modifier
+                )
+        ) {
+            // 层①：玻璃背景——软件模糊（vivo 唯一生效路径）+ Kyant0 折射透镜在外
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (glassActive) {
+                            val glassP = com.kaze.newage.ui.theme.glassParams(LocalGlassMode.current)
+                            val intensity = LocalGlassIntensity.current
+                            Modifier
+                                .glassBackdropBlur(
+                                    contentLayer = contentLayer,
+                                    // 更精细的源（0.4），真高斯交给 StackBlur 半径
+                                    sampleScale = 0.4f,
+                                    // 玻璃强度 → 高斯半径（越大越糊）
+                                    blurRadiusPx = (2f + 6f * (intensity - 0.5f)).coerceIn(1f, 9f),
+                                )
+                                .liquidGlassLensSafe(
+                                    refractionHeight = with(density) { 24.dp.toPx() },
+                                    refractionAmount = with(density) { 24.dp.toPx() } *
+                                        intensity * glassP.refractionScale,
+                                )
+                        } else Modifier
+                    )
+            )
+            // 层②：表面色（container alpha 0.4）
+            Box(Modifier.fillMaxSize().background(containerColor))
+            // 层③：图标与标签（始终在最上，不被折射）
+            Row(
+                Modifier.fillMaxSize().padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Dest.entries.forEach { dest ->
+                    val selected = currentRoute == dest.route
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            // HyperOS 的选中项是**整块浅蓝圆角**（primaryContainer），
+                            // 只有图标变色是 Material 的做法，两者的辨识度差别很大。
+                            .clip(RoundedCornerShape(if (isMiuix) 16.dp else 20.dp))
+                            .then(
+                                if (isMiuix && selected) {
+                                    Modifier.background(MaterialTheme.colorScheme.primaryContainer)
+                                } else Modifier
+                            )
+                            .clickable { onNavigate(dest) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
+                    ) {
+                        Icon(
+                            if (selected) dest.iconSelected else dest.icon,
+                            contentDescription = dest.label,
+                            modifier = Modifier.size(if (isMiuix) 20.dp else 22.dp),
+                            tint = if (isMiuix) {
+                                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurface
+                            } else if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                        Text(
+                            dest.label,
+                            fontSize = 11.sp,
+                            color = if (isMiuix) {
+                                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            } else if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

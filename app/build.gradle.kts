@@ -1,0 +1,204 @@
+import java.util.Properties
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.roborazzi)
+}
+
+// ── 发布签名凭据 ──
+// 优先取环境变量（CI Secret），其次取 local.properties（已被 .gitignore 忽略）。
+// 绝不硬编码口令，也绝不用 debug.keystore 签正式包：该密钥连同口令都在公开仓库里，
+// 任何人都能伪造一个「签名匹配、versionCode 更高」的 APK 被系统当作合法升级安装。
+// 详见 docs/RELEASE-SIGNING.md
+// 注意：这里必须用顶部 import 进来的 Properties，不能写 `java.util.Properties()` ——
+// 在 Gradle Kotlin DSL 里裸写 `java` 会被解析成 java 插件扩展而不是包名。
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun secret(envKey: String, propKey: String): String? =
+    (System.getenv(envKey) ?: localProps.getProperty(propKey))?.takeIf { it.isNotBlank() }
+
+val releaseStorePath = secret("KAZE_KEYSTORE", "kaze.keystore")
+val releaseStorePass = secret("KAZE_STORE_PASS", "kaze.storePassword")
+val releaseKeyAlias = secret("KAZE_KEY_ALIAS", "kaze.keyAlias")
+val releaseKeyPass = secret("KAZE_KEY_PASS", "kaze.keyPassword")
+val hasReleaseKey = listOf(releaseStorePath, releaseStorePass, releaseKeyAlias, releaseKeyPass)
+    .all { it != null }
+
+
+// ── 许可证全文随 APK 提供 ──
+// GPL-3.0 第 4/5 条要求向接收者提供许可证副本。文本放在仓库根目录（LICENSE /
+// THIRD_PARTY_NOTICES.md），构建时复制进 assets —— 这样只有一份真源，不会出现
+// "改了根目录忘了改 assets"导致 APK 里是旧文本的情况（这正是一次真实发生过的事）。
+val syncLicenseAssets by tasks.registering(Copy::class) {
+    from(rootProject.file("LICENSE")) { rename { "LICENSE-GPL-3.0.txt" } }
+    from(rootProject.file("THIRD_PARTY_NOTICES.md"))
+    into(layout.projectDirectory.dir("src/main/assets"))
+}
+
+tasks.named("preBuild") { dependsOn(syncLicenseAssets) }
+
+android {
+    namespace = "com.kaze.newage"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.kaze.newage"
+        minSdk = 27
+        // targetSdk 必须 ≤ 28：Android 按 targetSdk 选择 SELinux 域，≥30 的域（untrusted_app）
+        // 由 AOSP 的 neverallow 明确禁止 execve 应用私有目录中的文件（W^X），
+        // 而 proot 必须执行 rootfs 内的 guest 二进制（/usr/bin/dash 等），否则报
+        // `execve("/usr/bin/sh"): Permission denied`、环境永远起不来（vivo Android 16 真机实锤）。
+        // targetSdk 28 → untrusted_app_27 域，允许执行；Termux / PojavLauncher 同样停在 28。
+        targetSdk = 28
+        versionCode = 36
+        versionName = "0.11.1"
+    }
+
+    // ABI flavor：每包只带本架构的 native 库与 rootfs 资产；universal 全量（分发用）
+    flavorDimensions += "abi"
+    productFlavors {
+        create("arm64") {
+            dimension = "abi"
+            ndk { abiFilters += "arm64-v8a" }
+        }
+        create("armhf") {
+            dimension = "abi"
+            ndk { abiFilters += "armeabi-v7a" }
+        }
+        create("universal") {
+            dimension = "abi"
+            ndk {
+                abiFilters += "arm64-v8a"
+                abiFilters += "armeabi-v7a"
+            }
+        }
+    }
+
+    // 注意：signingConfigs 必须写在 buildTypes **之前** —— Kotlin DSL 顺序执行，
+    // 否则 buildTypes 里 getByName("release") 会因配置尚未创建而失败。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(releaseStorePath!!)
+                storePassword = releaseStorePass
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPass
+            }
+        }
+    }
+    lint {
+        // 具体禁用了哪些检查、为什么，全部写在 app/lint.xml 里（单一真源，
+        // 避免 build.gradle.kts 与 lint.xml 两处各写一份、迟早不一致）。
+        lintConfig = file("lint.xml")
+    }
+    buildTypes {
+        release {
+            // 开启 R8：未使用的 Material 图标此前会被整包打进 APK
+            // （实测 dex 里有 5.7 万处 material/icons/ 引用，而代码只用到 28 个图标）
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 拿不到发布密钥时不签名（产出 unsigned 包），而不是回退到 debug 密钥
+            signingConfig = if (hasReleaseKey) signingConfigs.getByName("release") else null
+        }
+        debug {
+            // 工作区内 keystore（沙箱环境无法写 ~/.android）
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildFeatures {
+        compose = true
+        // 设置页要显示真实版本号（此前硬编码 "v0.1.0"，与 versionName 长期不一致）
+        buildConfig = true
+    }
+    testOptions {
+        // 把 -Dkaze.* 透传给测试 JVM：Gradle 的 -D 只作用于守护进程，不传的话
+        // 那几条"吃真实产物"的用例（ApkPatchApplierTest 的真实补丁互通、
+        // ReleaseNotesTest 的真实发布正文）会**静默跳过** —— 看起来是绿的，实际什么都没验。
+        unitTests.all {
+            listOf("kaze.patch.dir", "kaze.notes.file").forEach { key ->
+                it.systemProperty(key, System.getProperty(key) ?: "")
+            }
+            // Roborazzi 的 record 开关同样要透传：Gradle 的 -D 只作用于守护进程，
+            // 不转发的话 `testXxx -Droborazzi.test.record=true` 会**全部通过却一张图都不产出**。
+            // 有了这条，才能只跑某个测试类的同时真的把 PNG 写出来
+            // （recordRoborazzi* 是聚合任务，没法与 --tests 过滤组合使用）。
+            it.systemProperty("roborazzi.test.record", System.getProperty("roborazzi.test.record") ?: "")
+            it.systemProperty("roborazzi.test.verify", System.getProperty("roborazzi.test.verify") ?: "")
+        }
+        // 单测只覆盖纯逻辑（版本比较 / server.properties 读写 / 控制台解析），不触碰 Android API
+        unitTests.isReturnDefaultValues = true
+        // Roborazzi 截图测试（Robolectric）需要真实 Android 资源
+        unitTests.isIncludeAndroidResources = true
+    }
+
+    // universal 变体：assets 直接复用 arm64 + armhf 两套（避免复制实体文件导致仓库膨胀）
+    sourceSets {
+        getByName("universal") {
+            assets.srcDirs("src/arm64/assets", "src/armhf/assets")
+        }
+    }
+}
+
+dependencies {
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // collectAsStateWithLifecycle：界面退到后台后停止收集流（本应用常驻前台服务，界面常在后台）
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.haze)
+    implementation(libs.miuix)
+    debugImplementation(libs.androidx.ui.tooling)
+    testImplementation(libs.junit)
+    // ── Roborazzi 截图测试（纯 JVM，无需模拟器/安装 APK）──
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+/**
+ * Roborazzi 的 PNG 是**测试进程的副作用产物**，不是测试任务声明的输出，
+ * 因此不会随 Gradle 构建缓存一起恢复。
+ *
+ * 后果：连续两次 `recordRoborazzi*` 而代码没变时，`testArm64DebugUnitTest` 会命中缓存
+ * （FROM-CACHE），`recordRoborazzi*` 显示 UP-TO-DATE 并"构建成功"，但 `build/screenshots/`
+ * 里**一张图都不会有** —— 看起来像功能坏了，实际只是没跑。
+ *
+ * 这里让单元测试不参与缓存/最新性判断，保证 `record` 每次都真的重新渲染。
+ * （测试规模很小，重跑成本可接受；换取的是"跑截图一定出图"。）
+ */
+tasks.withType<Test>().configureEach {
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+}

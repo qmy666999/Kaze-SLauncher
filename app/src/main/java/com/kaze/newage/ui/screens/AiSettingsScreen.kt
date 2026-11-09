@@ -1,0 +1,671 @@
+package com.kaze.newage.ui.screens
+
+import androidx.compose.material.icons.filled.Refresh
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.TravelExplore
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import androidx.compose.material3.Switch
+import com.kaze.newage.core.ai.AiSkills
+import com.kaze.newage.core.ai.AiCommandPolicy
+import com.kaze.newage.core.ai.AiToolPolicy
+import com.kaze.newage.core.ai.AiProfile
+import com.kaze.newage.core.ai.AiProfileStore
+import com.kaze.newage.ui.AppViewModel
+import com.kaze.newage.ui.components.M3EScreenHeader
+import com.kaze.newage.ui.components.M3EStatusChip
+import com.kaze.newage.ui.components.M3ESwitch
+import com.kaze.newage.ui.theme.M3Shape
+import com.kaze.newage.ui.theme.M3Spacing
+import com.kaze.newage.core.i18n.t
+
+/**
+ * AI 设置页（全屏）：模型配置档案 + 联网搜索源。
+ *
+ * 档案卡片单击 = 「对话」功能分配（参照 Operit 的 FunctionType→configId，卡片右侧
+ * 会挂「对话使用」徽标）；联网搜索源三选一（本机浏览器源零 Key）。编辑/新增是整页
+ * 表单；删除当前使用的档案会自动回退到剩余第一个。Key 只存应用私有目录。
+ */
+@Composable
+fun AiSettingsScreen(viewModel: AppViewModel, onBack: () -> Unit) {
+    val prefs = viewModel.uiPrefs
+    // null = 档案列表 + 搜索源；非 null = 正在编辑/新增该档案
+    var editing by remember { mutableStateOf<AiProfile?>(null) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+            // 表单页必须避让键盘：本项目是 adjustNothing + edge-to-edge，
+            // 不补的话聚焦下半屏输入框时键盘直接盖住内容且滚不出来
+            .imePadding()
+    ) {
+        // 头部钉住不随内容滚走：长内容滚下去后返回键也得在
+        M3EScreenHeader(
+            title = t("AI 设置"),
+            subtitle = t("模型配置 · 联网搜索"),
+            leading = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回"))
+                }
+            },
+        )
+
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
+        val editingProfile = editing
+        if (editingProfile != null) {
+            if (prefs.aiSecretStorageError.value) {
+                Text(
+                    t("系统密钥库不可用或写入失败，API Key 未保存。请检查设备安全组件后重试；应用不会降级为明文存储。"),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = M3Spacing.screenMargin, vertical = 8.dp),
+                )
+            }
+            AiProfileEditForm(
+                initial = editingProfile,
+                isNew = prefs.aiProfiles.value.none { it.id == editingProfile.id },
+                onSave = { p ->
+                    if (viewModel.saveAiProfile(p)) editing = null
+                },
+                onDelete = { id ->
+                    viewModel.deleteAiProfile(id)
+                    editing = null
+                },
+                onCancel = { editing = null },
+            )
+        } else {
+            ProfileSection(viewModel, onEdit = { editing = it })
+            Spacer(Modifier.height(8.dp))
+            CommandModeSection(viewModel)
+    ToolPolicySection(viewModel)
+    SkillsSection(viewModel)
+            Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(horizontal = M3Spacing.screenMargin, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun SectionNote(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = M3Spacing.screenMargin),
+    )
+}
+
+// ── 模型配置档案 ──
+
+@Composable
+private fun ProfileSection(viewModel: AppViewModel, onEdit: (AiProfile) -> Unit) {
+    val prefs = viewModel.uiPrefs
+    val profiles = prefs.aiProfiles.value
+
+    SectionTitle(t("模型配置"))
+    // 档案 JSON 损坏：配置看起来"全没了"，但原文已被保留 —— 必须明说，并给一个收尾入口。
+    // 沉默的话，用户会以为是自己删的，或者以为启动器把他的 Key 弄丢了。
+    if (prefs.aiProfilesCorrupt.value) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = M3Spacing.screenMargin, vertical = 4.dp),
+            shape = M3Shape.largeIncreased,
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(t("配置文件读取失败"), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    t("已保存的模型配置（含 API Key）格式损坏，本次没能读出来 —— ") +
+                        t("原始内容已原样保留，没有被删除。请重新填写一次 API Key；") +
+                        t("确认不再需要那份原文后，点下面的按钮清除。"),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = { viewModel.clearCorruptAiProfiles() }) {
+                    Text(t("我已处理，清除提示"))
+                }
+            }
+        }
+    }
+    SectionNote(
+        t("可建多份配置（不同服务商 / Key），单击卡片选择用于对话；点「编辑」修改模型与 Key。")
+    )
+    Spacer(Modifier.height(8.dp))
+
+    profiles.forEach { p ->
+        val assigned = p.id == prefs.aiChatProfileId.value
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = M3Spacing.screenMargin, vertical = 4.dp),
+            shape = M3Shape.largeIncreased,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            onClick = { viewModel.setChatAiProfile(p.id) },
+        ) {
+            Row(
+                Modifier.padding(start = 4.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 选择交给整卡点击；单选钮只负责展示当前分配
+                RadioButton(selected = assigned, onClick = null)
+                Column(Modifier.weight(1f).padding(vertical = 2.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            p.name.ifBlank { t("未命名") },
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (assigned) {
+                            M3EStatusChip(
+                                text = t("对话使用"),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Text(
+                        p.summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                TextButton(onClick = { onEdit(p) }) {
+                    Text(t("编辑"))
+                }
+            }
+        }
+    }
+
+    OutlinedButton(
+        onClick = { onEdit(AiProfile(name = "DeepSeek")) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin, vertical = 6.dp),
+        shape = M3Shape.large,
+    ) {
+        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.width(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(t("新增配置"))
+    }
+    if (profiles.isEmpty()) {
+        SectionNote(t("还没有配置 —— 点「新增配置」已预填 DeepSeek 默认值，填上你的 Key 即可用。"))
+    }
+}
+
+/** 单个档案的编辑表单（新增与编辑共用） */
+@Composable
+private fun AiProfileEditForm(
+    initial: AiProfile,
+    isNew: Boolean,
+    onSave: (AiProfile) -> Unit,
+    onDelete: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var name by remember(initial.id) { mutableStateOf(initial.name) }
+    var baseUrl by remember(initial.id) { mutableStateOf(initial.baseUrl) }
+    var models by remember(initial.id) { mutableStateOf(initial.models.joinToString(", ")) }
+    var key by remember(initial.id) { mutableStateOf(initial.apiKey) }
+    var extraBody by remember(initial.id) { mutableStateOf(initial.extraBody) }
+
+    SectionTitle(if (isNew) t("新增配置") else t("编辑配置"))
+    OutlinedTextField(
+        value = name,
+        onValueChange = { name = it },
+        label = { Text(t("配置名称")) },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = baseUrl,
+        onValueChange = { baseUrl = it },
+        label = { Text(t("服务地址")) },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = models,
+        onValueChange = { models = it },
+        label = { Text(t("模型名（可多个，逗号分隔）")) },
+        placeholder = { Text("deepseek-flash") },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = key,
+        onValueChange = { key = it },
+        label = { Text("API Key") },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin),
+        visualTransformation = PasswordVisualTransformation(),
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = extraBody,
+        onValueChange = { extraBody = it },
+        label = { Text(t("附加请求参数（JSON，可选）")) },
+        placeholder = { Text("""{"enable_thinking":true}""") },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = M3Spacing.screenMargin),
+        minLines = 2,
+    )
+    Spacer(Modifier.height(6.dp))
+    SectionNote(
+        "模型名留空回退 DeepSeek 默认；旧名（deepseek-chat / deepseek-reasoner）保存时自动归一。\n" +
+            t("「深度思考」：DeepSeek 走原生 thinking 参数；其它服务商若思考=换模型名，") +
+            t("填第二个模型名即可，或把显式参数写进附加参数。")
+    )
+    Spacer(Modifier.height(12.dp))
+    Row(
+        Modifier.padding(horizontal = M3Spacing.screenMargin),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = {
+            onSave(
+                initial.copy(
+                    name = name.trim().ifBlank { t("未命名") },
+                    baseUrl = baseUrl.trim(),
+                    models = AiProfileStore.parseModelList(models),
+                    apiKey = key.trim(),
+                    extraBody = extraBody.trim(),
+                )
+            )
+        }) {
+            Text(t("保存"))
+        }
+        if (!isNew) {
+            TextButton(onClick = { onDelete(initial.id) }) {
+                Text(t("删除"), color = MaterialTheme.colorScheme.error)
+            }
+        }
+        TextButton(onClick = onCancel) {
+            Text(t("取消"))
+        }
+    }
+}
+
+// ── 命令执行档位（借鉴 Harness 的权限分层）──
+
+@Composable
+private fun CommandModeSection(viewModel: AppViewModel) {
+    val prefs = viewModel.uiPrefs
+    val current = AiCommandPolicy.modeById(prefs.aiCommandMode.value)
+
+    SectionTitle(t("控制台命令执行"))
+    SectionNote(t("决定 AI 能在多大范围内直接执行服务端命令。无论哪档，执行记录都会写入审计日志。"))
+    Spacer(Modifier.height(8.dp))
+
+    AiCommandPolicy.Mode.entries.forEach { mode ->
+        val selected = mode.id == current.id
+        val danger = mode == AiCommandPolicy.Mode.ALL
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = M3Spacing.screenMargin, vertical = 4.dp),
+            shape = M3Shape.largeIncreased,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            onClick = { viewModel.setAiCommandMode(mode.id) },
+        ) {
+            Row(
+                Modifier.padding(start = 4.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = selected, onClick = null)
+                Column(Modifier.weight(1f).padding(vertical = 2.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(mode.label, style = MaterialTheme.typography.titleSmall)
+                        if (selected) {
+                            M3EStatusChip(text = t("当前"), color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (danger) {
+                            M3EStatusChip(text = t("慎用"), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Text(
+                        mode.desc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+    if (current == AiCommandPolicy.Mode.ALL) {
+        SectionNote(
+            t("已放开全部命令：AI 可能自行执行 stop 等影响服务端的命令（仍会先说明意图）。") +
+                t("随时可切回「仅建议」。")
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+}
+
+// ── 每个工具的权限（借鉴 Operit：Allow automatically / Ask every time / Deny）──
+
+// ── 技能（本地 md）──
+
+/**
+ * 技能：用户放在 `<实例目录>/skills/<名字>/SKILL.md` 的本地文档。
+ *
+ * 这里只展示"当前实例"的（技能是跟着实例走的：一个整合包的玩法说明对另一个服没用）。
+ * 开关状态存在 prefs 的「禁用名单」里 —— 新拷进来的技能默认启用。
+ */
+@Composable
+private fun SkillsSection(viewModel: AppViewModel) {
+    // aiDisabledSkills 是 Compose 的 mutableStateOf（State），本身就可观察；
+    // 不要用 collectAsStateWithLifecycle（那是给 StateFlow 的）
+    val disabled = viewModel.uiPrefs.aiDisabledSkills.value
+    // 每次进入设置页重新扫一次：用户可能刚把技能目录拷进 /sdcard
+    var scan by remember { mutableStateOf(viewModel.installedSkills()) }
+
+    // ── 快捷添加：新建 / 导入 / 删除 ──
+    //
+    // 之前只能自己把 md 拷进 skills/<名字>/SKILL.md —— 手机上既没有趁手的 md 编辑器，
+    // 还要记住目录结构与 frontmatter 格式。这里给应用内入口，格式由 SkillWriter 保证。
+    var showCreate by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<AiSkills.Skill?>(null) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var importNotice by remember { mutableStateOf<String?>(null) }
+
+    // 读文件走系统选择器：不申请存储权限，也不访问用户没选的文件。
+    // Context 必须在**组合期**取出来存进变量：launcher 的回调不是 @Composable 上下文，
+    // 在里面写 LocalContext.current 会编译失败（上一版就栽在这）。
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri: android.net.Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val read = runCatching {
+            ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                ins.readBytes().toString(Charsets.UTF_8)
+            }
+        }.getOrNull()
+        if (read == null) {
+            importError = t("无法读取所选文件（授权可能已失效，请重新选择）")
+            return@rememberLauncherForActivityResult
+        }
+        // 从 URI 里取显示名作为技能名（取不到就退回路径末段）
+        val name = runCatching {
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment ?: "imported-skill"
+        val err = viewModel.importSkill(name, read)
+        if (err != null) {
+            importError = err
+        } else {
+            scan = viewModel.installedSkills()
+            importNotice = t("已导入技能：%s", name)
+        }
+    }
+
+    if (showCreate) {
+        SkillCreateDialog(
+            onDismiss = { showCreate = false },
+            onSubmit = { n, d, b ->
+                val err = viewModel.createSkill(n, d, b)
+                if (err == null) scan = viewModel.installedSkills()
+                err
+            },
+        )
+    }
+    deleteTarget?.let { target ->
+        SkillDeleteDialog(
+            skillName = target.name,
+            onDismiss = { deleteTarget = null },
+            onConfirm = {
+                val err = viewModel.deleteSkill(target.id)
+                if (err == null) scan = viewModel.installedSkills()
+                err
+            },
+        )
+    }
+    importError?.let { r ->
+        SkillImportErrorDialog(reason = r, onDismiss = { importError = null })
+    }
+    importNotice?.let { n ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { importNotice = null },
+            confirmButton = {
+                TextButton(onClick = { importNotice = null }) { Text(t("知道了")) }
+            },
+            title = { Text(t("导入成功")) },
+            text = { Text(n, style = MaterialTheme.typography.bodySmall) },
+        )
+    }
+
+    SectionTitle(t("技能"))
+    SectionNote(
+        t("把技能放进实例目录的 skills/<名字>/SKILL.md，AI 就会知道它、需要时自己读取。") +
+            t("技能是你自己的本地文件（不联网、不下载）；这里可以逐个关掉，") +
+            t("关掉的技能不会出现在 AI 的清单里。")
+    )
+    Spacer(Modifier.height(8.dp))
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = M3Spacing.screenMargin),
+        shape = M3Shape.largeIncreased,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        onClick = { scan = viewModel.installedSkills() },
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(t("刷新技能列表"), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    t("当前实例：%s 个技能", scan.skills.size) +
+                        if (scan.warnings.isNotEmpty()) "，${scan.warnings.size} 个有问题" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = t("刷新"),
+                modifier = Modifier.padding(4.dp),
+            )
+        }
+    }
+
+    // 新建 / 导入：放在刷新卡下面，一行两个按钮
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = M3Spacing.screenMargin, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = { showCreate = true }, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(t("新建技能"))
+        }
+        OutlinedButton(
+            onClick = {
+                importLauncher.launch(arrayOf("text/markdown", "text/plain", "application/octet-stream"))
+            },
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Filled.FileOpen, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(t("从文件导入"))
+        }
+    }
+
+    if (scan.skills.isEmpty()) {
+        SectionNote(t("还没有技能：点上面的「新建技能」写一份，或「从文件导入」挑一个 md。"))
+    }
+    scan.skills.forEach { skill ->
+        val enabled = skill.id !in disabled
+        Surface(
+            modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = M3Spacing.screenMargin, vertical = 4.dp),
+            shape = M3Shape.largeIncreased,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Row(
+                Modifier.padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(skill.name, style = MaterialTheme.typography.titleSmall)
+                    if (skill.description.isNotBlank()) {
+                        Text(
+                            skill.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        skill.relativePath,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                IconButton(onClick = { deleteTarget = skill }) {
+                    Icon(
+                        Icons.Filled.DeleteOutline,
+                        contentDescription = t("删除技能"),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                M3ESwitch(
+                    checked = enabled,
+                    onCheckedChange = { viewModel.setSkillEnabled(skill.id, it) },
+                )
+            }
+        }
+    }
+    scan.warnings.forEach { w ->
+        SectionNote("⚠ $w")
+    }
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun ToolPolicySection(viewModel: AppViewModel) {
+    val prefs = viewModel.uiPrefs
+    SectionTitle(t("工具权限"))
+    SectionNote(
+        t("逐个工具决定 AI 能不能自己动手。自动＝需要时直接执行；每次询问＝执行前弹确认卡；") +
+            t("禁止＝永不执行（并会告诉模型它被禁用了，免得反复重试）。") +
+            t("读取敏感文件（凭据、ops.json、开了 rcon 的 server.properties）始终要确认，") +
+            t("不受这里的「自动」放宽。控制台命令由上面的「控制台命令执行」单独管。")
+    )
+    Spacer(Modifier.height(8.dp))
+
+    AiToolPolicy.TOOLS.forEach { tool ->
+        val current = prefs.aiToolMode(tool.id)
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = M3Spacing.screenMargin, vertical = 4.dp),
+            shape = M3Shape.largeIncreased,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Text(tool.label, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    tool.desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AiToolPolicy.Mode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = mode == current,
+                            onClick = { prefs.setAiToolPolicy(tool.id, mode) },
+                            label = { Text(mode.label) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+}

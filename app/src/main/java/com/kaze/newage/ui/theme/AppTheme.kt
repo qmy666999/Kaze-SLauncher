@@ -1,0 +1,82 @@
+package com.kaze.newage.ui.theme
+
+import androidx.compose.runtime.staticCompositionLocalOf
+import dev.chrisbanes.haze.HazeState
+import com.kaze.newage.core.i18n.t
+/**
+ * 主题模式：
+ *  - M3：Material 3 动态取色（Material You，跟随系统深浅色）
+ *  - GLASS：液态玻璃（Haze 原生背景模糊 + 折射，跟随系统深浅色）
+ *  - SHELL：「岚」手写视图界面（纸感 / 墨夜两套配色，自绘控件）
+ *  - MIUIX：HyperOS 风组件主题（Miuix 组件库；配色映射到 M3 ColorScheme，
+ *    使现有 M3 组件与 22 处 LocalAppTheme 分支无需改写即可获得正确颜色）
+ *
+ * 三者都是**用户可见的界面样式**，所以在同一个选择器里并列，而不是拆成
+ * 「主题样式」+「界面外壳」两个概念 —— 用户要的是"我的应用长什么样"，
+ * 不该关心内部是用 Compose 还是手写 View 实现的。
+ *
+ * 实现上 SHELL 与另两者不同：它换的是整个 Activity（见 ShellSwitch），
+ * 因为手写视图与 Compose 各自持有独立的主题体系，塞进一棵树里会互相污染。
+ * 但这个差异**只存在于实现层**，选择器上它们平等。
+ */
+enum class AppThemeMode(val id: String, val label: String, val desc: String) {
+    M3("m3", "Material 3", t("动态取色（Material You）")),
+    GLASS("glass", t("液态玻璃"), t("原生背景模糊 + 折射")),
+    SHELL("shell", t("岚"), t("纸感 / 墨夜 · 自绘视图")),
+    MIUIX("miuix", "Miuix", t("HyperOS 风组件")),
+    ;
+
+    /** 该样式是否由手写视图层实现（需要整壳切换，而非 Compose 内换主题） */
+    val isViewShell: Boolean get() = this == SHELL
+
+    companion object {
+        fun fromId(id: String?): AppThemeMode = when (id) {
+            "glass" -> GLASS
+            "aurora" -> GLASS // 旧版「极光」迁移
+            "shell" -> SHELL
+            "miuix" -> MIUIX
+            "clear" -> M3    // 旧版「简洁面板」迁移为 Material 3
+            else -> M3
+        }
+    }
+}
+
+/** 当前主题模式（供组件/色板函数按主题差异化渲染） */
+val LocalAppTheme = staticCompositionLocalOf { AppThemeMode.M3 }
+
+/**
+ * 实际生效的深色状态（由 NewAgeTheme 提供，与「跟随系统/强制浅色/强制深色」解析结果一致）。
+ * 背景层/条目色须读它，不能读 isSystemInDarkTheme()。
+ */
+val LocalDarkTheme = staticCompositionLocalOf { false }
+
+/**
+ * Haze 状态（安卓原生背景模糊）。由 AppBackground 提供；
+ * 玻璃表面经 hazeEffect 采样其背后内容做真实模糊（API 31+ 生效，低版本自动降级为半透明）。
+ */
+val LocalHazeState = staticCompositionLocalOf<HazeState?> { null }
+
+/**
+ * 原生模糊是否启用（设置「原生模糊」开关；个别 GPU 渲染异常时可关闭回退半透明玻璃）。
+ */
+val LocalGlassBlurEnabled = staticCompositionLocalOf { true }
+
+/**
+ * 图标与文字颜色模式（设置「背景图 → 图标与文字颜色」）：
+ *  - AUTO：跟随主题深浅色（默认）
+ *  - LIGHT：强制白色（深色背景图）
+ *  - DARK：强制黑色（浅色背景图）
+ */
+enum class FgColorMode(val id: String, val label: String) {
+    AUTO("auto", t("跟随主题")),
+    LIGHT("light", t("白色")),
+    DARK("dark", t("黑色")),
+    ;
+
+    companion object {
+        fun fromId(id: String?): FgColorMode = entries.firstOrNull { it.id == id } ?: AUTO
+    }
+}
+
+/** 当前图标与文字颜色模式（由 NewAgeTheme 提供） */
+val LocalFgColorMode = staticCompositionLocalOf { FgColorMode.AUTO }
