@@ -23,6 +23,7 @@
 
 - 赞助二维码更新为最新支付宝码（`docs/images/alipay.jpg`，替换旧的 `alipay.png`），README 赞助区注明"收款人洋洋，谨防仿冒"。
 - 新增 `dist/`：放入**已签名**的 arm64 安装包、`SHA256SUMS.txt` 与安装说明，并在 `.gitignore` 里为 `dist/*.apk` 开例外 —— 克隆仓库即可直接安装，不必自己构建。
+- 移除微信收款码（docs/images/wechat.png），赞助区只保留支付宝（README 赞助表改单列）。
 
 ---
 ## [0.11.0] - 2026-11-09
@@ -950,26 +951,10 @@ StateFlow 读-改-写 0 处、SharedPreferences 改完漏 apply 0 处；8 处空
 
 ## 历史开发记录（归档，非当前待发布内容）
 
-> 以下内容保留旧版开发与排查细节，仅供追溯；当前未发布变更只看文件顶部的 `## [0.11.1] - 2026-11-09
-
-### Fixed
-
-- **樱花映射登录后报 `Unexpected 'null' value instead of string literal at $[0].status_reason`**
-  樱花 `/v4/tunnels` 的响应里 `status_reason` / `note` / `extra` / `remote` / `local_ip`
-  等字段会直接返回 `null`，而数据类把它们声明成非空 `String`（带默认值）。
-  kotlinx 默认**不会**把显式 null 当作"用默认值"，于是解析抛异常，界面显示成
-  "密钥识别不了"——其实账号信息已经取到了。
-  现在解析器开启 `coerceInputValues = true`，并额外加了一层逐字段宽松解析兜底：
-  字段为 null、或类型漂移（例如 `online` 变成字符串 `"true"`）都只影响该字段，
-  不会再让整个登录/隧道列表失败。补了两个回归测试（null 字段 / 类型漂移）。
-  版本 0.11.0 → **0.11.1**（versionCode 36）。
-
-### Docs / Packaging
-
-- 赞助二维码更新为最新支付宝码（`docs/images/alipay.jpg`，替换旧的 `alipay.png`），README 赞助区注明"收款人洋洋，谨防仿冒"。
-- 新增 `dist/`：放入**已签名**的 arm64 安装包、`SHA256SUMS.txt` 与安装说明，并在 `.gitignore` 里为 `dist/*.apk` 开例外 —— 克隆仓库即可直接安装，不必自己构建。
+> 以下内容保留旧版开发与排查细节，仅供追溯；当前变更只看文件顶部的版本记录。
 
 ---
+
 ## [0.11.0] - 2026-11-09
 
 ### Added
