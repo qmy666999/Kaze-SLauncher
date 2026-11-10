@@ -111,7 +111,7 @@ object Downloader {
         shouldCancel: () -> Boolean = { false },
         validate: (File) -> Boolean,
     ) {
-        val candidates = com.kaze.newage.core.content.ContentSources.fileCandidates(urlStr)
+        val candidates = com.kaze.newage.core.content.ContentSources.preferredFileCandidates(urlStr)
         var lastError: Exception? = null
         for ((index, candidate) in candidates.withIndex()) {
             try {

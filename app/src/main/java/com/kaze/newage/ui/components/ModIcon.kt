@@ -111,7 +111,7 @@ fun RemoteIcon(
         }
         // cdn.modrinth.com 在国内经常连不上：原地址失败后自动换 MCIM 的 /data/ 镜像，
         // 否则搜索结果会整片显示占位图标（"图标没补齐"就是这个原因）。
-        val candidates = com.kaze.newage.core.content.ContentSources.fileCandidates(url)
+        val candidates = com.kaze.newage.core.content.ContentSources.preferredFileCandidates(url)
         val decoded = runCatching {
             candidates.firstNotNullOfOrNull { candidate ->
                 downloadRemoteIcon(candidate)?.let { decodeSampled(it) }
@@ -215,8 +215,9 @@ private fun downloadRemoteIcon(url: String): File? {
     val out = File(dir, name)
     if (out.isFile && out.length() > 0) return out
     val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 8000
-        readTimeout = 8000
+        // 图标只是装饰：单个候选最多等 5 秒，失败立刻换下一个（镜像通常 <1 秒）
+        connectTimeout = 5000
+        readTimeout = 5000
         setRequestProperty("User-Agent", "KazeSLauncher/3.0 (Android)")
     }
     try {

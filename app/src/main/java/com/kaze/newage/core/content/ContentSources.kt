@@ -91,9 +91,19 @@ object ContentSources {
         return if (mirror == null) listOf(url) else listOf(url, mirror)
     }
 
+    /**
+     * **镜像优先**的候选顺序：`[镜像, 原地址]`。
+     *
+     * 国内直连 `cdn.modrinth.com` 通常要等到 connect 超时（8 秒）才会失败，
+     * 列表里几十个图标逐个等 8 秒，表现就是"图标一直是占位图"。
+     * 所以图标与下载都先用镜像，镜像失败再回原地址。
+     */
+    fun preferredFileCandidates(url: String): List<String> =
+        fileCandidates(url).reversed()
+
     /** 图标地址：优先用镜像（国内直连 cdn 基本会失败，白白等超时） */
     fun iconUrl(url: String): String =
-        fileCandidates(url).lastOrNull() ?: url
+        preferredFileCandidates(url).firstOrNull() ?: url
 
     /** 当前尝试顺序（第一个是首选） */
     fun active(): List<ContentSource> = order
