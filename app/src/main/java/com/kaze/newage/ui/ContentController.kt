@@ -5,6 +5,7 @@ import android.net.Uri
 import com.kaze.newage.core.addons.AddonKind
 import com.kaze.newage.core.addons.AddonManager
 import com.kaze.newage.core.addons.ModrinthVersion
+import com.kaze.newage.core.addons.ModrinthApi
 import com.kaze.newage.core.addons.ModrinthProject
 import com.kaze.newage.core.addons.ModrinthSearchHit
 import com.kaze.newage.core.bedrock.BedrockPack
@@ -41,6 +42,7 @@ class ContentController(
     private val context: Context,
     private val instanceStore: InstanceStore,
     private val scope: CoroutineScope,
+    private val prefs: com.kaze.newage.data.prefs.SettingsPrefs,
     private val onInstanceCreated: (ServerInstance) -> Unit = {},
 ) {
 
@@ -60,6 +62,13 @@ class ContentController(
         val hasMore: Boolean = false,
         /** 搜索时是否忽略实例的加载器/MC 版本（"全部版本"） */
         val showAllVersions: Boolean = false,
+        /** 收藏的项目 id */
+        val favorites: Set<String> = emptySet(),
+        /** 只看收藏（替代搜索结果区） */
+        val showFavoritesOnly: Boolean = false,
+        /** 收藏项目的完整信息（打开"只看收藏"时拉取） */
+        val favoriteProjects: List<ModrinthProject> = emptyList(),
+        val favoriteLoading: Boolean = false,
         val recommended: List<ModrinthProject> = emptyList(),
         val recommendedLoading: Boolean = false,
         val recommendedError: String? = null,
@@ -203,6 +212,66 @@ class ContentController(
         _content.value = _content.value.copy(showAllVersions = showAll)
         val state = _content.value
         search(lastInstance, state.query, state.sort, 0)
+    }
+
+    // ── 项目详情（对齐 ZalithLauncher2 的下载页：点条目看介绍/标签/版本）──
+
+    data class ProjectDetail(
+        val visible: Boolean = false,
+        val loading: Boolean = false,
+        val project: ModrinthProject? = null,
+        val error: String? = null,
+    )
+
+    private val _detail = MutableStateFlow(ProjectDetail())
+    val detail: StateFlow<ProjectDetail> = _detail.asStateFlow()
+
+    /** 打开详情：列表里的项目没有 Markdown 正文，这里补一次 `/project/{id}` */
+    fun openProjectDetail(project: ModrinthProject) {
+        _detail.value = ProjectDetail(visible = true, loading = true, project = project)
+        scope.launch(Dispatchers.IO) {
+            val full = runCatching { ModrinthApi.project(project.id) }
+            _detail.value = _detail.value.copy(
+                loading = false,
+                project = full.getOrNull() ?: project,
+                error = full.exceptionOrNull()?.message,
+            )
+        }
+    }
+
+    fun dismissProjectDetail() {
+        _detail.value = ProjectDetail()
+    }
+
+    // ── 收藏 ──
+
+    init {
+        _content.value = _content.value.copy(favorites = prefs.favoriteProjects.value)
+    }
+
+    fun toggleFavorite(projectId: String) {
+        prefs.toggleFavorite(projectId)
+        val favorites = prefs.favoriteProjects.value
+        _content.value = _content.value.copy(favorites = favorites)
+        if (_content.value.showFavoritesOnly) loadFavoriteProjects()
+    }
+
+    fun setShowFavoritesOnly(show: Boolean) {
+        _content.value = _content.value.copy(showFavoritesOnly = show)
+        if (show) loadFavoriteProjects()
+    }
+
+    private fun loadFavoriteProjects() {
+        val ids = prefs.favoriteProjects.value.toList()
+        if (ids.isEmpty()) {
+            _content.value = _content.value.copy(favoriteProjects = emptyList(), favoriteLoading = false)
+            return
+        }
+        _content.value = _content.value.copy(favoriteLoading = true)
+        scope.launch(Dispatchers.IO) {
+            val projects = runCatching { ModrinthApi.projects(ids) }.getOrDefault(emptyList())
+            _content.value = _content.value.copy(favoriteProjects = projects, favoriteLoading = false)
+        }
     }
 
     // ── 版本选择对话框 ──

@@ -167,6 +167,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application), Ai
         context = container.appContext,
         instanceStore = container.instanceStore,
         scope = viewModelScope,
+        prefs = container.uiPrefs,
         onInstanceCreated = { inst -> selectInstance(inst) },
     )
 

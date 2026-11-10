@@ -355,7 +355,36 @@ emember(path) 缓存位图的话，
         val raw = prefs.getString(key, "")?.trim().orEmpty()
         return if (raw.isEmpty()) "" else AiKeyCipher.decrypt(raw).orEmpty()
     }
+    // ── 资源中心收藏 ──
+    //
+    // 存项目 id 的 JSON 数组：ZalithLauncher2 的下载页有"收藏"入口，
+    // 这里给资源中心加一个轻量版（星标 + 只看收藏）。
+    val favoriteProjects = mutableStateOf(loadFavorites())
+
+    private fun loadFavorites(): Set<String> = runCatching {
+        val raw = prefs.getString("favorite_projects", "") ?: ""
+        if (raw.isBlank()) emptySet()
+        else raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }.getOrDefault(emptySet())
+
+    fun toggleFavorite(projectId: String): Boolean {
+        val id = projectId.trim()
+        if (id.isEmpty()) return false
+        val next = favoriteProjects.value.toMutableSet()
+        val nowFavorite = if (id in next) {
+            next.remove(id)
+            false
+        } else {
+            next.add(id)
+            true
+        }
+        favoriteProjects.value = next
+        prefs.edit().putString("favorite_projects", next.joinToString(",")).apply()
+        return nowFavorite
+    }
+
     // ── 内容源（资源中心 / 附加搜索用的 Modrinth 域名）──
+
     //
     // 默认 auto：官方优先、失败自动切 MCIM 镜像。国内网络直连 api.modrinth.com
     // 经常超时，写死官方会让整个资源中心变成"没有可用条目"。

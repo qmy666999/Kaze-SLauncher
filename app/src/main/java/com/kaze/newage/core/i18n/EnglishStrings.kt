@@ -1337,5 +1337,9 @@ internal object EnglishStrings {
         "MC %s" to "MC %s",
         "全部版本" to "All versions",
         "忽略加载器与 MC 版本过滤" to "Ignore loader and MC version filters",
+        "收藏" to "Favorite",
+        "收藏（%s）" to "Favorites (%s)",
+        "还没有收藏项目：点条目右侧的星标即可收藏" to "No favorites yet — tap the star on a row to save it",
+        "详情加载失败：%s" to "Failed to load details: %s",
     )
 }

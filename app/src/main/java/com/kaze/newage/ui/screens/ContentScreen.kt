@@ -76,6 +76,9 @@ import com.kaze.newage.ui.components.CheckChip
 import com.kaze.newage.ui.components.ExpressiveLoadingRing
 import com.kaze.newage.ui.components.FileImageIcon
 import com.kaze.newage.ui.components.VersionPickerDialog
+import com.kaze.newage.ui.components.ProjectDetailDialog
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import com.kaze.newage.ui.components.M3ECard
 import com.kaze.newage.ui.components.M3ECardVariant
 import com.kaze.newage.ui.components.M3EConnectedList
@@ -134,6 +137,7 @@ fun ContentScreen(
     val bedrock by controller.bedrock.collectAsStateWithLifecycle()
     val sourceTests by controller.sourceTests.collectAsStateWithLifecycle()
     val versionPicker by controller.versionPicker.collectAsStateWithLifecycle()
+    val detail by controller.detail.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var tab by rememberSaveable { mutableStateOf(ContentTab.Mods) }
@@ -168,6 +172,20 @@ fun ContentScreen(
             ContentTab.Worlds -> instance?.let { controller.loadWorlds(it) }
             ContentTab.Bedrock -> controller.loadBedrock(instance)
         }
+    }
+
+    if (detail.visible) {
+        ProjectDetailDialog(
+            state = detail,
+            favorite = detail.project?.id?.let { it in content.favorites } == true,
+            onToggleFavorite = { detail.project?.let { controller.toggleFavorite(it.id) } },
+            onInstall = {
+                val project = detail.project
+                controller.dismissProjectDetail()
+                instance?.let { inst -> project?.let { p -> controller.openVersionPicker(inst, p) } }
+            },
+            onDismiss = { controller.dismissProjectDetail() },
+        )
     }
 
     if (versionPicker.visible) {
@@ -409,6 +427,39 @@ private fun BrowseSection(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        CheckChip(
+            selected = content.showFavoritesOnly,
+            label = t("收藏（%s）", content.favorites.size),
+            onClick = { controller.setShowFavoritesOnly(!content.showFavoritesOnly) },
+        )
+    }
+
+    if (content.showFavoritesOnly) {
+        when {
+            content.favoriteLoading -> Row(
+                Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+            ) { ExpressiveLoadingRing(size = 20.dp, speed = 1.4f) }
+            content.favoriteProjects.isEmpty() -> Text(
+                t("还没有收藏项目：点条目右侧的星标即可收藏"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+            else -> M3EConnectedList(count = content.favoriteProjects.size) { index, shape ->
+                val project = content.favoriteProjects[index]
+                ProjectRow(
+                    project = project,
+                    supporting = project.description,
+                    shape = shape,
+                    busy = content.installing,
+                    favorite = true,
+                    onToggleFavorite = { controller.toggleFavorite(project.id) },
+                    onOpenDetail = { controller.openProjectDetail(project) },
+                    onInstall = { controller.openVersionPicker(instance, project) },
+                )
+            }
+        }
     }
 
     // ── 安装进度 / 结果 ──
@@ -489,6 +540,9 @@ private fun BrowseSection(
                         .ifBlank { project.description },
                     shape = shape,
                     busy = content.installing,
+                    favorite = project.id in content.favorites,
+                    onToggleFavorite = { controller.toggleFavorite(project.id) },
+                    onOpenDetail = { controller.openProjectDetail(project) },
                     onInstall = { controller.openVersionPicker(instance, project) },
                 )
             }
@@ -503,7 +557,7 @@ private fun BrowseSection(
     }
 
     // ── 搜索结果 ──
-    if (content.searched) {
+    if (!content.showFavoritesOnly && content.searched) {
         Text(
             if (content.totalHits > 0) t("搜索结果（%s）", content.totalHits) else t("搜索结果"),
             style = MaterialTheme.typography.titleMedium,
@@ -525,6 +579,21 @@ private fun BrowseSection(
                     hit = hit,
                     shape = shape,
                     busy = content.installing,
+                    favorite = hit.project_id in content.favorites,
+                    onToggleFavorite = { controller.toggleFavorite(hit.project_id) },
+                    onOpenDetail = {
+                        controller.openProjectDetail(
+                            ModrinthProject(
+                                id = hit.project_id,
+                                slug = hit.slug,
+                                title = hit.title,
+                                description = hit.description,
+                                project_type = hit.project_type,
+                                icon_url = hit.icon_url,
+                                downloads = hit.downloads.toLong(),
+                            ),
+                        )
+                    },
                     onInstall = { controller.installHit(instance, hit) },
                 )
             }
@@ -562,6 +631,9 @@ private fun ProjectRow(
     supporting: String,
     shape: androidx.compose.ui.graphics.Shape,
     busy: Boolean,
+    favorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onOpenDetail: () -> Unit,
     onInstall: () -> Unit,
 ) {
     M3EListItem(
@@ -572,12 +644,23 @@ private fun ProjectRow(
                 url = project.icon_url,
                 fallback = if (project.project_type == "resourcepack") Icons.Filled.FileDownload
                 else Icons.Filled.Extension,
-                size = 44.dp,
+                size = 48.dp,
             )
         },
+        onClick = onOpenDetail,
         shape = shape,
         trailing = {
-            Button(onClick = onInstall, enabled = !busy) { Text(t("安装")) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = t("收藏"),
+                        tint = if (favorite) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Button(onClick = onInstall, enabled = !busy) { Text(t("安装")) }
+            }
         },
     )
 }
@@ -587,6 +670,9 @@ private fun HitRow(
     hit: ModrinthSearchHit,
     shape: androidx.compose.ui.graphics.Shape,
     busy: Boolean,
+    favorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onOpenDetail: () -> Unit,
     onInstall: () -> Unit,
 ) {
     M3EListItem(
@@ -597,12 +683,23 @@ private fun HitRow(
             RemoteIcon(
                 url = hit.icon_url,
                 fallback = Icons.Filled.Extension,
-                size = 44.dp,
+                size = 48.dp,
             )
         },
+        onClick = onOpenDetail,
         shape = shape,
         trailing = {
-            Button(onClick = onInstall, enabled = !busy) { Text(t("安装")) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = t("收藏"),
+                        tint = if (favorite) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Button(onClick = onInstall, enabled = !busy) { Text(t("安装")) }
+            }
         },
     )
 }

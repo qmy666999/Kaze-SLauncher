@@ -65,11 +65,21 @@ object ContentCatalog {
         limit: Int = 20,
         /** true = 不按实例的加载器/MC 版本过滤（"全部版本"开关） */
         includeAllVersions: Boolean = false,
+        /** 手动指定的加载器（筛选器）；null = 跟随实例 */
+        loaderOverride: String? = null,
+        /** 手动指定的 MC 版本（筛选器）；null = 跟随实例 */
+        gameVersionOverride: String? = null,
     ): ModrinthSearchResult {
-        val loaders = if (includeAllVersions) emptyList()
-        else instance?.let { loadersFor(it, kind) }.orEmpty()
-        val gameVersion = if (includeAllVersions) null
-        else instance?.mcVersion?.takeIf { it.isNotBlank() && !it.startsWith("bedrock", true) }
+        val loaders = when {
+            includeAllVersions -> emptyList()
+            !loaderOverride.isNullOrBlank() -> listOf(loaderOverride)
+            else -> instance?.let { loadersFor(it, kind) }.orEmpty()
+        }
+        val gameVersion = when {
+            includeAllVersions -> null
+            !gameVersionOverride.isNullOrBlank() -> gameVersionOverride
+            else -> instance?.mcVersion?.takeIf { it.isNotBlank() && !it.startsWith("bedrock", true) }
+        }
         return ModrinthApi.searchContent(
             query = query,
             projectType = kind.modrinthType,

@@ -54,6 +54,8 @@ data class ModrinthProject(
     /** required / optional / unsupported —— 用来判断"这个项目的服务端到底需不需要" */
     val client_side: String = "",
     val server_side: String = "",
+    /** 项目详情的 Markdown 正文（`/project/{id}` 才返回，列表接口为空） */
+    val body: String = "",
 ) {
     val webUrl: String get() = "https://modrinth.com/${project_type.ifBlank { "mod" }}/$slug"
 }
