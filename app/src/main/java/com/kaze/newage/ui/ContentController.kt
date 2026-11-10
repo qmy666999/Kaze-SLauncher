@@ -274,55 +274,51 @@ class ContentController(
         }
     }
 
-    // ── 版本选择对话框 ──
+    // ── 版本面板（内嵌在资源中心页面上，不再弹对话框）──
 
-    data class VersionPickerState(
-        val visible: Boolean = false,
-        val loading: Boolean = false,
+    data class VersionsPanel(
         val project: ModrinthProject? = null,
+        val loading: Boolean = false,
         val versions: List<ModrinthVersion> = emptyList(),
         val includeAll: Boolean = false,
         val error: String? = null,
-    )
-
-    private val _versionPicker = MutableStateFlow(VersionPickerState())
-    val versionPicker: StateFlow<VersionPickerState> = _versionPicker.asStateFlow()
-
-    private var pickerInstance: ServerInstance? = null
-
-    /** 打开"选择版本"：默认只列兼容当前实例的版本 */
-    fun openVersionPicker(instance: ServerInstance, project: ModrinthProject) {
-        pickerInstance = instance
-        _versionPicker.value = VersionPickerState(visible = true, loading = true, project = project)
-        loadPickerVersions(instance, project, includeAll = false)
+    ) {
+        val visible: Boolean get() = project != null
     }
 
-    fun openVersionPicker(instance: ServerInstance, hit: ModrinthSearchHit) {
-        openVersionPicker(
-            instance,
-            ModrinthProject(
-                id = hit.project_id,
-                slug = hit.slug,
-                title = hit.title,
-                description = hit.description,
-                project_type = hit.project_type,
-                icon_url = hit.icon_url,
-                downloads = hit.downloads.toLong(),
-            ),
-        )
+    private val _versionsPanel = MutableStateFlow(VersionsPanel())
+    val versionsPanel: StateFlow<VersionsPanel> = _versionsPanel.asStateFlow()
+
+    private var panelInstance: ServerInstance? = null
+
+    /** 点「版本」：同一个项目再点一次收起；否则加载并展开 */
+    fun toggleVersionsPanel(instance: ServerInstance, project: ModrinthProject) {
+        if (_versionsPanel.value.project?.id == project.id) {
+            _versionsPanel.value = VersionsPanel()
+            return
+        }
+        panelInstance = instance
+        _versionsPanel.value = VersionsPanel(project = project, loading = true)
+        loadPanelVersions(instance, project, includeAll = false)
     }
 
-    /** 切换"显示全部版本"（含其他 MC 版本） */
-    fun setPickerIncludeAll(includeAll: Boolean) {
-        val state = _versionPicker.value
-        val instance = pickerInstance ?: return
-        val project = state.project ?: return
-        if (state.includeAll == includeAll && state.versions.isNotEmpty()) return
-        _versionPicker.value = state.copy(includeAll = includeAll, loading = true, error = null)
-        loadPickerVersions(instance, project, includeAll)
+    fun toggleVersionsPanel(instance: ServerInstance, hit: ModrinthSearchHit) {
+        toggleVersionsPanel(instance, projectOf(hit))
     }
 
-    private fun loadPickerVersions(instance: ServerInstance, project: ModrinthProject, includeAll: Boolean) {
+    fun setPanelIncludeAll(includeAll: Boolean) {
+        val panel = _versionsPanel.value
+        val instance = panelInstance ?: return
+        val project = panel.project ?: return
+        _versionsPanel.value = panel.copy(includeAll = includeAll, loading = true, error = null)
+        loadPanelVersions(instance, project, includeAll)
+    }
+
+    fun closeVersionsPanel() {
+        _versionsPanel.value = VersionsPanel()
+    }
+
+    private fun loadPanelVersions(instance: ServerInstance, project: ModrinthProject, includeAll: Boolean) {
         val kind = _content.value.kind
         scope.launch(Dispatchers.IO) {
             try {
@@ -332,14 +328,14 @@ class ContentController(
                 } else {
                     ContentCatalog.packVersions(project.id, instance.mcVersion, includeAll)
                 }
-                _versionPicker.value = _versionPicker.value.copy(
+                _versionsPanel.value = _versionsPanel.value.copy(
                     loading = false,
                     versions = versions,
                     includeAll = includeAll,
                     error = null,
                 )
             } catch (e: Exception) {
-                _versionPicker.value = _versionPicker.value.copy(
+                _versionsPanel.value = _versionsPanel.value.copy(
                     loading = false,
                     error = e.message ?: "版本列表加载失败",
                 )
@@ -347,19 +343,25 @@ class ContentController(
         }
     }
 
-    fun dismissVersionPicker() {
-        _versionPicker.value = VersionPickerState()
-    }
-
-    /** 安装用户选中的版本 */
-    fun installPickedVersion(instance: ServerInstance, version: ModrinthVersion) {
-        val project = _versionPicker.value.project ?: return
-        dismissVersionPicker()
+    /** 从面板里直接装某个版本 */
+    fun installPanelVersion(instance: ServerInstance, version: ModrinthVersion) {
+        val project = _versionsPanel.value.project ?: return
         install(instance, project, version)
     }
 
+    /** 搜索结果条目 → 项目对象（收藏 / 详情 / 版本面板共用） */
+    fun projectOf(hit: ModrinthSearchHit): ModrinthProject = ModrinthProject(
+        id = hit.project_id,
+        slug = hit.slug,
+        title = hit.title,
+        description = hit.description,
+        project_type = hit.project_type,
+        icon_url = hit.icon_url,
+        downloads = hit.downloads.toLong(),
+    )
+
     fun installHit(instance: ServerInstance, hit: ModrinthSearchHit) {
-        openVersionPicker(instance, hit)
+        toggleVersionsPanel(instance, projectOf(hit))
     }
 
     /**

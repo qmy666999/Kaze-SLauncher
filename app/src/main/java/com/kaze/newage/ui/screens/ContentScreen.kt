@@ -47,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -75,7 +76,6 @@ import com.kaze.newage.ui.AppViewModel
 import com.kaze.newage.ui.components.CheckChip
 import com.kaze.newage.ui.components.ExpressiveLoadingRing
 import com.kaze.newage.ui.components.FileImageIcon
-import com.kaze.newage.ui.components.VersionPickerDialog
 import com.kaze.newage.ui.components.ProjectDetailDialog
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
@@ -136,7 +136,7 @@ fun ContentScreen(
     val worlds by controller.worlds.collectAsStateWithLifecycle()
     val bedrock by controller.bedrock.collectAsStateWithLifecycle()
     val sourceTests by controller.sourceTests.collectAsStateWithLifecycle()
-    val versionPicker by controller.versionPicker.collectAsStateWithLifecycle()
+    val versionsPanel by controller.versionsPanel.collectAsStateWithLifecycle()
     val detail by controller.detail.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -182,23 +182,26 @@ fun ContentScreen(
             onInstall = {
                 val project = detail.project
                 controller.dismissProjectDetail()
-                instance?.let { inst -> project?.let { p -> controller.openVersionPicker(inst, p) } }
+                instance?.let { inst -> project?.let { p -> controller.toggleVersionsPanel(inst, p) } }
             },
             onDismiss = { controller.dismissProjectDetail() },
         )
     }
 
-    if (versionPicker.visible) {
-        VersionPickerDialog(
-            projectTitle = versionPicker.project?.title ?: "",
-            state = versionPicker,
-            onToggleAll = { controller.setPickerIncludeAll(it) },
-            onInstall = { version ->
-                instance?.let { controller.installPickedVersion(it, version) }
+    if (detail.visible) {
+        ProjectDetailDialog(
+            state = detail,
+            favorite = detail.project?.id?.let { it in content.favorites } == true,
+            onToggleFavorite = { detail.project?.let { controller.toggleFavorite(it.id) } },
+            onInstall = {
+                val project = detail.project
+                controller.dismissProjectDetail()
+                instance?.let { inst -> project?.let { p -> controller.toggleVersionsPanel(inst, p) } }
             },
-            onDismiss = { controller.dismissVersionPicker() },
+            onDismiss = { controller.dismissProjectDetail() },
         )
     }
+
 
     Column(Modifier.fillMaxSize().imePadding()) {
         M3EScreenHeader(
@@ -272,6 +275,7 @@ fun ContentScreen(
                     kind = tab.kind ?: ContentKind.MOD,
                     controller = controller,
                     content = content,
+                    versionsPanel = versionsPanel,
                     query = query,
                     onQueryChange = { query = it },
                     onSearch = { controller.search(instance, query) },
@@ -350,6 +354,7 @@ private fun BrowseSection(
     kind: ContentKind,
     controller: com.kaze.newage.ui.ContentController,
     content: com.kaze.newage.ui.ContentController.ContentUiState,
+    versionsPanel: com.kaze.newage.ui.ContentController.VersionsPanel,
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
@@ -434,6 +439,82 @@ private fun BrowseSection(
         )
     }
 
+    if (versionsPanel.visible) {
+        M3ECard(
+            variant = M3ECardVariant.Outlined,
+            title = t("版本 · %s", versionsPanel.project?.title.orEmpty()),
+            supporting = t("选一个版本直接安装；不需要时可点「收起」"),
+            content = {
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Switch(
+                            checked = versionsPanel.includeAll,
+                            onCheckedChange = { controller.setPanelIncludeAll(it) },
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(t("显示全部 MC 版本"), style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { controller.closeVersionsPanel() }) { Text(t("收起")) }
+                    }
+                    if (versionsPanel.loading) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) { ExpressiveLoadingRing(size = 20.dp, speed = 1.4f) }
+                    } else {
+                        versionsPanel.error?.let {
+                            Text(
+                                t("版本列表加载失败：%s", it),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (versionsPanel.versions.isEmpty() && versionsPanel.error == null) {
+                            Text(
+                                t("没有可用版本；可以打开「显示全部 MC 版本」再试"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        versionsPanel.versions.forEach { version ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        version.version_number.ifBlank { version.id.take(8) },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        buildString {
+                                            if (version.game_versions.isNotEmpty()) {
+                                                append(t("MC %s", version.game_versions.take(4).joinToString("/")))
+                                                if (version.game_versions.size > 4) append("…")
+                                            }
+                                            if (version.loaders.isNotEmpty()) {
+                                                if (isNotEmpty()) append(" · ")
+                                                append(version.loaders.joinToString("/"))
+                                            }
+                                        }.ifBlank { t("未标注兼容版本") },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(onClick = {
+                                    instance?.let { controller.installPanelVersion(it, version) }
+                                }) { Text(t("安装")) }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+
     if (content.showFavoritesOnly) {
         when {
             content.favoriteLoading -> Row(
@@ -456,7 +537,7 @@ private fun BrowseSection(
                     favorite = true,
                     onToggleFavorite = { controller.toggleFavorite(project.id) },
                     onOpenDetail = { controller.openProjectDetail(project) },
-                    onInstall = { controller.openVersionPicker(instance, project) },
+                    onInstall = { controller.toggleVersionsPanel(instance, project) },
                 )
             }
         }
@@ -543,7 +624,7 @@ private fun BrowseSection(
                     favorite = project.id in content.favorites,
                     onToggleFavorite = { controller.toggleFavorite(project.id) },
                     onOpenDetail = { controller.openProjectDetail(project) },
-                    onInstall = { controller.openVersionPicker(instance, project) },
+                    onInstall = { controller.toggleVersionsPanel(instance, project) },
                 )
             }
         } else if (!content.recommendedLoading && content.recommendedError == null) {

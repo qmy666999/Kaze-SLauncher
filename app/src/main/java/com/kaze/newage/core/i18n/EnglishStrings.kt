@@ -1341,5 +1341,7 @@ internal object EnglishStrings {
         "收藏（%s）" to "Favorites (%s)",
         "还没有收藏项目：点条目右侧的星标即可收藏" to "No favorites yet — tap the star on a row to save it",
         "详情加载失败：%s" to "Failed to load details: %s",
+        "版本 · %s" to "Versions · %s",
+        "选一个版本直接安装；不需要时可点「收起」" to "Pick a version to install; tap Collapse to hide",
     )
 }
