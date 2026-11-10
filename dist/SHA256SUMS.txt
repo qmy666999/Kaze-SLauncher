@@ -1,1 +1,1 @@
-6f36fb227270c45deb770e245a0e5c395b16d3e786033447e36f9d8ac02de167  Kaze-SLauncher-0.11.3-arm64-signed.apk?? Release ???
+35677fe3a724c26fb4814382969597d61a30feed8674dc86a5e2aee11519a21e  Kaze-SLauncher-0.11.4-arm64-signed.apk?? Release ???

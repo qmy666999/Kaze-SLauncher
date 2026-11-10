@@ -78,6 +78,20 @@ class NetworkCoreTest {
             ContentSources.join(ContentSources.MCIM_URL, "project/sodium/version"),
         )
     }
+    /** 回归：Modrinth 的 CDN 文件/图标要能映射到 MCIM 镜像（国内直连 cdn 会失败） */
+    @Test
+    fun mapsCdnFilesToMcimMirror() {
+        val icon = "https://cdn.modrinth.com/data/AANobbMI/295862f4724dc3f78df3447ad6072b2dcd3ef0c9_96.webp"
+        val candidates = ContentSources.fileCandidates(icon)
+        assertEquals(2, candidates.size)
+        assertEquals(icon, candidates.first())
+        assertTrue(candidates.last().startsWith("https://mod.mcimirror.top/data/"))
+        assertTrue(ContentSources.iconUrl(icon).startsWith("https://mod.mcimirror.top/"))
+
+        // 非 CDN 地址不做改写，避免把别人的 URL 弄坏
+        val other = "https://example.com/a.jar"
+        assertEquals(listOf(other), ContentSources.fileCandidates(other))
+    }
     // ── 自建 frp 配置 ──
 
     @Test

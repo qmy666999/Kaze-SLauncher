@@ -124,7 +124,11 @@ object ModrinthApi {
     fun versions(projectId: String, loader: String, gameVersion: String? = null): List<ModrinthVersion> {
         val gamePart = gameVersion?.let { """&game_versions=${enc("[\"$it\"]")}""" } ?: ""
         val url = "project/$projectId/version?loaders=${enc("[\"$loader\"]")}$gamePart"
-        val body = getFresh(url)
+        val body = try {
+            getFresh(url)
+        } catch (e: Exception) {
+            if (e.message?.contains("HTTP 400") == true) getFresh("project/$projectId/version") else throw e
+        }
         return json.decodeFromString<List<ModrinthVersion>>(body)
     }
 
@@ -171,7 +175,18 @@ object ModrinthApi {
         }
         val url = "search?query=${enc(query)}&limit=$limit&offset=$offset" +
             "&index=$sort&facets=${enc(facetsJson)}"
-        return json.decodeFromString<ModrinthSearchResult>(get(url))
+        val body = try {
+            get(url)
+        } catch (e: Exception) {
+            // 某些镜像/版本会对 facets 组合返回 400；退化掉过滤条件再搜一次，
+            // 宁可结果不准，也不让整个搜索页只显示一条 400。
+            if (e.message?.contains("HTTP 400") == true) {
+                get("search?query=${enc(query)}&limit=$limit&offset=$offset&index=$sort")
+            } else {
+                throw e
+            }
+        }
+        return json.decodeFromString<ModrinthSearchResult>(body)
     }
 
     /** 单个项目详情（接受项目 id 或 slug） */
@@ -204,7 +219,12 @@ object ModrinthApi {
         } else {
             "project/$projectId/version?game_versions=${enc("[\"$gv\"]")}"
         }
-        return json.decodeFromString<List<ModrinthVersion>>(getFresh(url))
+        val body = try {
+            getFresh(url)
+        } catch (e: Exception) {
+            if (e.message?.contains("HTTP 400") == true) getFresh("project/$projectId/version") else throw e
+        }
+        return json.decodeFromString<List<ModrinthVersion>>(body)
     }
 
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
@@ -264,7 +284,16 @@ object ModrinthApi {
             conn.readTimeout = 20000
             conn.setRequestProperty("User-Agent", USER_AGENT)
             val code = conn.responseCode
-            if (code != 200) throw RuntimeException("HTTP $code")
+            if (code != 200) {
+                // 带上服务端返回的正文：Modrinth 的 400 会说清楚哪个参数不合法，
+                // 只报 "HTTP 400" 根本没法排查问题。
+                val detail = runCatching {
+                    conn.errorStream?.bufferedReader()?.use { it.readText().take(200) }
+                }.getOrNull()?.replace("\n", " ")?.trim()
+                throw RuntimeException(
+                    "HTTP $code" + (detail?.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""),
+                )
+            }
             return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()

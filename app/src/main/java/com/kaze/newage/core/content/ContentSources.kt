@@ -73,6 +73,28 @@ object ContentSources {
         val p = path.trim().let { if (it.startsWith("/")) it else "/$it" }
         return b + p
     }
+    /**
+     * 文件（图标 / jar / zip）的候选地址：原地址 + MCIM 文件镜像。
+     *
+     * Modrinth 的文件与图标都在 `cdn.modrinth.com`，国内经常连不上（图标空白、下载 404/超时）。
+     * 实测 MCIM 把 CDN 内容原样挂在 `https://mod.mcimirror.top/data/...`，路径一致，
+     * 所以这里只做"换域名"，不动路径 —— 图标和下载都能直接复用。
+     */
+    fun fileCandidates(url: String): List<String> {
+        val mirror = runCatching {
+            val uri = java.net.URI(url)
+            if (!uri.host.equals("cdn.modrinth.com", ignoreCase = true)) return@runCatching null
+            val path = uri.rawPath ?: return@runCatching null
+            if (!path.startsWith("/data/")) return@runCatching null
+            "https://mod.mcimirror.top" + path + (uri.rawQuery?.let { "?$it" } ?: "")
+        }.getOrNull()
+        return if (mirror == null) listOf(url) else listOf(url, mirror)
+    }
+
+    /** 图标地址：优先用镜像（国内直连 cdn 基本会失败，白白等超时） */
+    fun iconUrl(url: String): String =
+        fileCandidates(url).lastOrNull() ?: url
+
     /** 当前尝试顺序（第一个是首选） */
     fun active(): List<ContentSource> = order
 

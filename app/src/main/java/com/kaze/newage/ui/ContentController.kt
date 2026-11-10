@@ -52,6 +52,9 @@ class ContentController(
         val hits: List<ModrinthSearchHit> = emptyList(),
         val totalHits: Int = 0,
         val searched: Boolean = false,
+        /** 搜索结果当前页码（0 起） */
+        val page: Int = 0,
+        val hasMore: Boolean = false,
         val recommended: List<ModrinthProject> = emptyList(),
         val recommendedLoading: Boolean = false,
         val recommendedError: String? = null,
@@ -117,7 +120,20 @@ class ContentController(
         }
     }
 
-    fun search(instance: ServerInstance?, query: String, sort: ContentCatalog.Sort = _content.value.sort) {
+    /** 最近一次搜索的实例：翻页时复用，避免界面再传一遍 */
+    private var lastInstance: ServerInstance? = null
+
+    private companion object {
+        const val PAGE_SIZE = 20
+    }
+
+    fun search(
+        instance: ServerInstance?,
+        query: String,
+        sort: ContentCatalog.Sort = _content.value.sort,
+        page: Int = 0,
+    ) {
+        lastInstance = instance
         val kind = _content.value.kind
         val requestId = ++searchRequestId
         _content.value = _content.value.copy(
@@ -131,11 +147,20 @@ class ContentController(
         )
         scope.launch(Dispatchers.IO) {
             try {
-                val result = ContentCatalog.search(kind, instance, query, sort)
+                val result = ContentCatalog.search(
+                    kind = kind,
+                    instance = instance,
+                    query = query,
+                    sort = sort,
+                    offset = page * PAGE_SIZE,
+                    limit = PAGE_SIZE,
+                )
                 if (requestId == searchRequestId) {
                     _content.value = _content.value.copy(
                         hits = result.hits,
                         totalHits = result.total_hits,
+                        page = page,
+                        hasMore = result.hits.size >= PAGE_SIZE,
                         loading = false,
                     )
                 }
@@ -145,10 +170,25 @@ class ContentController(
                         loading = false,
                         error = e.message ?: "搜索失败",
                         hits = emptyList(),
+                        hasMore = false,
                     )
                 }
             }
         }
+    }
+
+    /** 下一页（保持同一个实例/查询/排序） */
+    fun nextPage() {
+        val state = _content.value
+        if (state.loading || !state.hasMore) return
+        search(lastInstance, state.query, state.sort, state.page + 1)
+    }
+
+    /** 上一页 */
+    fun prevPage() {
+        val state = _content.value
+        if (state.loading || state.page <= 0) return
+        search(lastInstance, state.query, state.sort, state.page - 1)
     }
 
     fun installHit(instance: ServerInstance, hit: ModrinthSearchHit) {

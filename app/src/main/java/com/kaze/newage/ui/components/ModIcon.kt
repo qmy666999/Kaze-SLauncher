@@ -109,7 +109,14 @@ fun RemoteIcon(
             value = it
             return@produceState
         }
-        val decoded = runCatching { downloadRemoteIcon(url)?.let { decodeSampled(it) } }.getOrNull()
+        // cdn.modrinth.com 在国内经常连不上：原地址失败后自动换 MCIM 的 /data/ 镜像，
+        // 否则搜索结果会整片显示占位图标（"图标没补齐"就是这个原因）。
+        val candidates = com.kaze.newage.core.content.ContentSources.fileCandidates(url)
+        val decoded = runCatching {
+            candidates.firstNotNullOfOrNull { candidate ->
+                downloadRemoteIcon(candidate)?.let { decodeSampled(it) }
+            }
+        }.getOrNull()
         if (decoded != null) IconMemoryCache.put(url, decoded)
         value = decoded
     }

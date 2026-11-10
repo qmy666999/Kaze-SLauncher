@@ -499,6 +499,28 @@ private fun BrowseSection(
                     onInstall = { controller.installHit(instance, hit) },
                 )
             }
+            if (!content.loading && (content.hits.isNotEmpty() || content.page > 0)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = M3Spacing.betweenParts),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { controller.prevPage() }, enabled = content.page > 0) {
+                        Text(t("上一页"))
+                    }
+                    Text(
+                        t("第 %s 页", content.page + 1),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                    TextButton(onClick = { controller.nextPage() }, enabled = content.hasMore) {
+                        Text(t("下一页"))
+                    }
+                }
+            }
         }
     }
 }

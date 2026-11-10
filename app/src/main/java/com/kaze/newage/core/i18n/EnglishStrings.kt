@@ -1317,5 +1317,16 @@ internal object EnglishStrings {
         "已保存登录" to "Saved sign-in",
         "正在用已保存的访问密钥恢复登录…" to "Restoring sign-in with the saved access token…",
         "登录状态会保持：访问密钥加密存在本机，下次进入自动恢复，只有点「退出登录」才会清除。" to "Sign-in is kept: the access token is stored encrypted on this device and restored automatically; only “Sign out” clears it.",
+        "上一页" to "Previous",
+        "下一页" to "Next",
+        "第 %s 页" to "Page %s",
+        "检测各源" to "Test sources",
+        "显示每个源是否可用（404/超时会标出来）" to "Shows whether each source works (404/timeout highlighted)",
+        "一键刷新" to "Refresh all",
+        "Tailscale / 樱花隧道 / frps 连通性" to "Tailscale / Sakura tunnels / frps reachability",
+        "检测" to "Test",
+        "正在检测 frps…" to "Checking frps…",
+        "frps 可达（%s ms）" to "frps reachable (%s ms)",
+        "frps 不可达：%s" to "frps unreachable: %s",
     )
 }
