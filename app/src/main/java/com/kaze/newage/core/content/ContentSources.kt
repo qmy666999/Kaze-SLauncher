@@ -61,6 +61,18 @@ object ContentSources {
         }
     }
 
+    /**
+     * 拼接 baseUrl 与接口路径。
+     *
+     * 这是本文件里唯一该做字符串拼接的地方：baseUrl 以 `/v2` 结尾、路径以 `/` 开头，
+     * 少一个斜杠就会变成 `/v2project/...`（HTTP 404），而多一个就是 `//project`。
+     * 统一在这里兜住，调用点不必再记这条规则。
+     */
+    fun join(baseUrl: String, path: String): String {
+        val b = baseUrl.trimEnd('/')
+        val p = path.trim().let { if (it.startsWith("/")) it else "/$it" }
+        return b + p
+    }
     /** 当前尝试顺序（第一个是首选） */
     fun active(): List<ContentSource> = order
 

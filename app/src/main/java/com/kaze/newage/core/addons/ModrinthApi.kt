@@ -124,7 +124,7 @@ object ModrinthApi {
     fun versions(projectId: String, loader: String, gameVersion: String? = null): List<ModrinthVersion> {
         val gamePart = gameVersion?.let { """&game_versions=${enc("[\"$it\"]")}""" } ?: ""
         val url = "project/$projectId/version?loaders=${enc("[\"$loader\"]")}$gamePart"
-        val body = get(url)
+        val body = getFresh(url)
         return json.decodeFromString<List<ModrinthVersion>>(body)
     }
 
@@ -204,7 +204,7 @@ object ModrinthApi {
         } else {
             "project/$projectId/version?game_versions=${enc("[\"$gv\"]")}"
         }
-        return json.decodeFromString<List<ModrinthVersion>>(get(url))
+        return json.decodeFromString<List<ModrinthVersion>>(getFresh(url))
     }
 
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
@@ -215,22 +215,44 @@ object ModrinthApi {
      * 这是"资源中心显示没有可用条目"的根治点：以前写死官方域名，网络不通就整页空；
      * 现在官方超时后会自动换 MCIM 镜像，并把成功的那一个记为 [activeBase]（界面可显示）。
      */
+    /**
+     * 版本/下载地址优先走**官方源**：镜像的版本列表可能滞后（实测 MCIM 返回的
+     * Sodium 还是 0.5.11，官方已经是 0.8.x），旧版本的文件地址在 CDN 上可能 404。
+     * 官方失败再退回 [get] 的多源轮询。
+     */
+    private fun getFresh(path: String): String {
+        val clean = if (path.startsWith("/")) path else "/$path"
+        return try {
+            httpGet(ContentSources.join(ContentSources.OFFICIAL_URL, clean))
+        } catch (e: Exception) {
+            get(clean)
+        }
+    }
     private fun get(pathOrUrl: String): String {
-        val path = if (pathOrUrl.startsWith("http")) ContentSources.pathOf(pathOrUrl) else pathOrUrl
+        // 关键：baseUrl 以 `/v2` 结尾，path 必须以 `/` 开头。
+        // 之前调用点写成 "project/..."（丢了开头的斜杠）时拼出来是 `.../v2project/...`，
+        // Modrinth 一律 404 —— 这正是"资源中心一直 HTTP 404"的根因。
+        val rawPath = if (pathOrUrl.startsWith("http")) ContentSources.pathOf(pathOrUrl) else pathOrUrl
+        val path = if (rawPath.startsWith("/")) rawPath else "/$rawPath"
         val sources = ContentSources.active()
         var lastError: Exception? = null
         for (source in sources) {
             try {
-                val body = httpGet(source.baseUrl + path)
+                val body = httpGet(ContentSources.join(source.baseUrl, path))
                 if (activeBase != source.baseUrl) activeBase = source.baseUrl
                 return body
             } catch (e: Exception) {
                 lastError = e
             }
         }
+        val reason = lastError?.message ?: "网络错误"
+        val hint = if (reason.contains("404")) {
+            "（接口或项目不存在；镜像可能未收录该接口，可在右上角切换内容源）"
+        } else {
+            ""
+        }
         throw RuntimeException(
-            "所有内容源都不可用（${sources.joinToString(" / ") { it.label }}）：" +
-                (lastError?.message ?: "网络错误"),
+            "所有内容源都不可用（${sources.joinToString(" / ") { it.label }}）：$reason$hint",
             lastError,
         )
     }

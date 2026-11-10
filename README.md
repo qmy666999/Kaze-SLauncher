@@ -149,18 +149,15 @@ CI 会运行单元测试和界面截图测试；Release 流水线还会检查正
 
 > 扫码时请确认收款人显示为「洋洋」，谨防仿冒二维码。
 
-## 📦 直接安装包
+## 📦 下载安装包
 
-`dist/` 目录里放了**已签名**的 arm64 安装包（随源码一起提交，方便没有构建环境的用户）：
+已签名 arm64 安装包放在 **Releases**（不再提交进 git，避免仓库被 33 MB 二进制撑大）：
 
-- `dist/Kaze-SLauncher-0.11.2-arm64-signed.apk`（versionCode 37 / versionName 0.11.2）
-- `dist/SHA256SUMS.txt`：安装包校验值，下载后可自行核对
+- 最新发行：https://github.com/qmy666999/Kaze-SLauncher/releases
+- 当前版本：`v0.11.3`（versionCode 38 / versionName 0.11.3）
 - 签名证书 SHA-256：`674f95fb44d6b62f615b35061400ad21290f784bf4e565876bb2324506974128`
   （与旧版本一致，可覆盖升级；换签名会导致无法覆盖安装）
-
-> 正式分发建议在 GitHub **Releases** 里挂 APK（不进 git 历史、不占仓库体积）；
-> `dist/` 这份是为了"克隆下来就能装"。
-
+- 校验值见 `dist/SHA256SUMS.txt`
 ## 免责声明
 
 - 使用 Minecraft 服务端前，请阅读并遵守 [Minecraft EULA](https://aka.ms/MinecraftEULA)。

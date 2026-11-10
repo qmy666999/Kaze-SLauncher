@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -93,6 +94,7 @@ fun NetworkScreen(
     val frpMessage by controller.message.collectAsStateWithLifecycle()
     val busy by controller.busy.collectAsStateWithLifecycle()
     val progress by controller.progress.collectAsStateWithLifecycle()
+    val frpProbe by controller.frpProbe.collectAsStateWithLifecycle()
     val syncStates by viewModel.modSyncStates.collectAsStateWithLifecycle()
     val sync = instance?.let { syncStates[it.id] } ?: ModSyncServer.Snapshot()
 
@@ -124,6 +126,23 @@ fun NetworkScreen(
                 }
             },
         )
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = M3Spacing.screenMargin),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = { controller.refreshAll() }) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(t("一键刷新"))
+            }
+            Text(
+                t("Tailscale / 樱花隧道 / frps 连通性"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         Column(
             Modifier
@@ -235,6 +254,7 @@ fun NetworkScreen(
                             )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { controller.refreshSakura() }) { Text(t("刷新")) }
                             TextButton(onClick = { controller.logoutSakura() }) { Text(t("退出登录")) }
                             if (sakura.tunnels.isEmpty() && !sakura.loading) {
                                 TextButton(onClick = { controller.ensureLogin() }) { Text(t("重试")) }
@@ -378,6 +398,27 @@ fun NetworkScreen(
                         TextButton(onClick = { controller.stopTunnel() }, enabled = frpcState.running) {
                             Text(t("停止"))
                         }
+                        TextButton(onClick = {
+                            controller.probeFrp(serverAddr, serverPort.toIntOrNull() ?: 7000)
+                        }) { Text(t("检测")) }
+                    }
+                    if (frpProbe.checking) {
+                        Text(
+                            t("正在检测 frps…"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (frpProbe.reachable != null) {
+                        Text(
+                            if (frpProbe.reachable == true) {
+                                t("frps 可达（%s ms）", frpProbe.latencyMs ?: 0)
+                            } else {
+                                t("frps 不可达：%s", frpProbe.detail)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (frpProbe.reachable == true) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                        )
                     }
                     frpMessage.takeIf { it.isNotBlank() }?.let {
                         Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

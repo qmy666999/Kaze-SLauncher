@@ -73,8 +73,74 @@ class NetworkController(
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress.asStateFlow()
 
+    /** frps 连通性探测结果（自建 frp 卡片的「检测/刷新」用） */
+    data class FrpProbe(
+        val checking: Boolean = false,
+        val reachable: Boolean? = null,
+        val latencyMs: Long? = null,
+        val checkedAt: Long = 0L,
+        val detail: String = "",
+    )
+
+    private val _frpProbe = MutableStateFlow(FrpProbe())
+    val frpProbe: StateFlow<FrpProbe> = _frpProbe.asStateFlow()
+
     fun refreshTailscale() {
         _tailscale.value = NetworkAccess.tailscale(context)
+    }
+
+    /** 刷新樱花：强制重新拉账号信息与隧道列表（保留已选隧道） */
+    fun refreshSakura() {
+        val token = _sakura.value.token.ifBlank { prefs.sakuraToken.value }
+        if (token.isBlank()) {
+            _sakura.value = _sakura.value.copy(error = "还没有登录（缺少访问密钥）")
+            return
+        }
+        loginSakura(token, silent = true)
+    }
+
+    /**
+     * 检测 frps 是否可达（TCP 连接 + 计时）。
+     *
+     * 只做一次 connect，不发送任何数据 —— frp 的端口是纯 TCP 转发，
+     * 能建立连接就说明地址/端口/网络路径是通的；失败则给出具体原因。
+     */
+    fun probeFrp(server: String, port: Int) {
+        val host = server.trim()
+        if (host.isBlank()) {
+            _frpProbe.value = FrpProbe(detail = "先填 frps 地址")
+            return
+        }
+        _frpProbe.value = FrpProbe(checking = true)
+        scope.launch(Dispatchers.IO) {
+            val started = System.currentTimeMillis()
+            val result = runCatching {
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress(host, port), 4000)
+                }
+            }
+            val cost = System.currentTimeMillis() - started
+            _frpProbe.value = if (result.isSuccess) {
+                FrpProbe(reachable = true, latencyMs = cost, checkedAt = System.currentTimeMillis(), detail = "frps 可达")
+            } else {
+                FrpProbe(
+                    reachable = false,
+                    latencyMs = cost,
+                    checkedAt = System.currentTimeMillis(),
+                    detail = result.exceptionOrNull()?.message ?: "连接失败",
+                )
+            }
+        }
+    }
+
+    /**
+     * 一键刷新：Tailscale 检测 + 樱花隧道 + frps 连通性，各自独立，互不阻塞。
+     */
+    fun refreshAll(serverAddr: String = prefs.frpServer.value, serverPort: Int = prefs.frpServerPort.value) {
+        refreshTailscale()
+        if (_sakura.value.token.isNotBlank() || prefs.sakuraToken.value.isNotBlank()) refreshSakura()
+        if (serverAddr.isNotBlank()) probeFrp(serverAddr, serverPort)
+        _message.value = "已刷新（Tailscale / 樱花 / frps）"
     }
 
     fun openTailscale(): Boolean = NetworkAccess.openTailscale(context)

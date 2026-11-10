@@ -10,6 +10,7 @@ import com.kaze.newage.core.bedrock.BedrockRelease
 import com.kaze.newage.core.bedrock.BedrockServer
 import com.kaze.newage.core.content.ContentCatalog
 import com.kaze.newage.core.content.ContentKind
+import com.kaze.newage.core.content.ContentSources
 import com.kaze.newage.core.content.RecommendedProjects
 import com.kaze.newage.core.server.ServerProperties
 import com.kaze.newage.core.world.WorldInfo
@@ -225,6 +226,52 @@ class ContentController(
         }
     }
 
+    // ── 内容源自检（诊断 404 用）──
+
+    data class SourceTest(
+        val label: String,
+        val ok: Boolean,
+        val ms: Long,
+        val detail: String = "",
+    )
+
+    private val _sourceTests = MutableStateFlow<List<SourceTest>>(emptyList())
+    val sourceTests: StateFlow<List<SourceTest>> = _sourceTests.asStateFlow()
+
+    /** 逐个请求各内容源的最小搜索接口，给出"哪个源通、耗时多少、失败原因" */
+    fun testSources() {
+        val sources = ContentSources.active()
+        _sourceTests.value = sources.map { SourceTest(it.label, false, 0, "检测中…") }
+        scope.launch(Dispatchers.IO) {
+            _sourceTests.value = sources.map { source ->
+                val started = System.currentTimeMillis()
+                val result = runCatching {
+                    val conn = java.net.URL(source.baseUrl + "/search?query=sodium&limit=1")
+                        .openConnection() as java.net.HttpURLConnection
+                    try {
+                        conn.connectTimeout = 8000
+                        conn.readTimeout = 10000
+                        conn.setRequestProperty("User-Agent", "KazeSLauncher/0.11 (Android)")
+                        val code = conn.responseCode
+                        if (code != 200) throw RuntimeException("HTTP $code")
+                        conn.inputStream.use { it.readBytes() }
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+                SourceTest(
+                    label = source.label,
+                    ok = result.isSuccess,
+                    ms = System.currentTimeMillis() - started,
+                    detail = result.exceptionOrNull()?.message ?: "OK",
+                )
+            }
+        }
+    }
+
+    fun clearSourceTests() {
+        _sourceTests.value = emptyList()
+    }
     fun clearInstallMessages() {
         _content.value = _content.value.copy(
             installError = null,

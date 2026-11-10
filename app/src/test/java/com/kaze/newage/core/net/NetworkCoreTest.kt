@@ -62,6 +62,22 @@ class NetworkCoreTest {
         )
     }
 
+    /** 回归：baseUrl 与路径拼接不能丢/多斜杠（丢斜杠会让 Modrinth 全部 404） */
+    @Test
+    fun joinsApiUrlWithoutDoubleOrMissingSlash() {
+        assertEquals(
+            "https://api.modrinth.com/v2/project/sodium",
+            ContentSources.join(ContentSources.OFFICIAL_URL, "project/sodium"),
+        )
+        assertEquals(
+            "https://api.modrinth.com/v2/search?query=x",
+            ContentSources.join(ContentSources.OFFICIAL_URL, "/search?query=x"),
+        )
+        assertEquals(
+            "https://mod.mcimirror.top/modrinth/v2/project/sodium/version",
+            ContentSources.join(ContentSources.MCIM_URL, "project/sodium/version"),
+        )
+    }
     // ── 自建 frp 配置 ──
 
     @Test

@@ -131,6 +131,7 @@ fun ContentScreen(
     val content by controller.content.collectAsStateWithLifecycle()
     val worlds by controller.worlds.collectAsStateWithLifecycle()
     val bedrock by controller.bedrock.collectAsStateWithLifecycle()
+    val sourceTests by controller.sourceTests.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var tab by rememberSaveable { mutableStateOf(ContentTab.Mods) }
@@ -273,6 +274,8 @@ fun ContentScreen(
         ContentSourceDialog(
             initialMode = viewModel.uiPrefs.contentSource.value,
             initialUrl = viewModel.uiPrefs.contentSourceCustomUrl.value,
+            tests = sourceTests,
+            onTest = { controller.testSources() },
             onDismiss = { showSourceDialog = false },
             onSave = { mode, url ->
                 viewModel.uiPrefs.setContentSource(mode, url)
@@ -971,6 +974,8 @@ private fun formatDownloads(n: Long): String = when {
 private fun ContentSourceDialog(
     initialMode: String,
     initialUrl: String,
+    tests: List<com.kaze.newage.ui.ContentController.SourceTest>,
+    onTest: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
@@ -1013,6 +1018,17 @@ private fun ContentSourceDialog(
                         label = { Text(t("镜像地址（…/v2）")) },
                         placeholder = { Text("https://example.com/modrinth/v2") },
                         singleLine = true,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onTest) { Text(t("检测各源")) }
+                    Text(t("显示每个源是否可用（404/超时会标出来）"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                tests.forEach { test ->
+                    Text(
+                        (if (test.ok) "✓ " else "✗ ") + test.label + "  " + test.ms + "ms · " + test.detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (test.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     )
                 }
                 Text(

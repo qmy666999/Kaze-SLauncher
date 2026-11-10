@@ -33,7 +33,6 @@ object RecommendedProjects {
         Entry("luckperms", "权限组管理，替代 OP 一把梭"),
         Entry("worldguard", "领地保护，防拆家"),
         Entry("worldedit", "批量建造与地形编辑"),
-        Entry("vault", "经济/权限接口，很多插件依赖"),
         Entry("placeholderapi", "变量占位符，聊天/计分板插件前置"),
         Entry("chunky", "区块预生成，减少跑图卡顿"),
         Entry("coreprotect", "方块改动记录与回滚"),
@@ -43,7 +42,6 @@ object RecommendedProjects {
     val RESOURCEPACKS: List<Entry> = listOf(
         Entry("faithful-32x", "原版风格 32x，清晰又不花哨"),
         Entry("faithful-64x", "原版风格 64x，更细腻"),
-        Entry("stay-true", "贴近原版的高清材质"),
         Entry("fresh-animations", "更流畅的动画（低配友好）"),
     )
 

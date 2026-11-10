@@ -114,12 +114,21 @@ object ContentCatalog {
         val key = "${kind.name}|${instance?.coreType?.name.orEmpty()}|${instance?.mcVersion.orEmpty()}"
         val now = System.currentTimeMillis()
         recommendedCache[key]?.takeIf { now - it.at < RECOMMENDED_TTL_MS }?.let { return it.items }
-        val all = ModrinthApi.projects(RecommendedProjects.slugs(kind))
+        val slugs = RecommendedProjects.slugs(kind)
+        // 批量接口失败（镜像未收录 / 404 / 网络）时**逐个回退**：只要有一个项目能取到，
+        // 推荐区就不该整块空着。逐个取时跳过已下架的项目。
+        var all = runCatching { ModrinthApi.projects(slugs) }.getOrElse { emptyList() }
+        if (all.isEmpty()) {
+            all = slugs.mapNotNull { slug ->
+                runCatching { ModrinthApi.project(slug) }.getOrNull()
+            }
+        }
         val filtered = all.filter { matches(it, instance, kind) }
         // 过滤后为空时**退回全量**：宁可显示"可能不兼容"的推荐，也不要让整页空着
         // （实例版本/加载器千奇百怪，严格的过滤反而会制造"资源中心没有内容"的错觉）。
         val result = if (filtered.isEmpty()) all else filtered
-        recommendedCache[key] = Cached(now, result)
+        // 只缓存非空结果：一次网络失败若缓存了空列表，10 分钟内都会显示"没有可用条目"
+        if (result.isNotEmpty()) recommendedCache[key] = Cached(now, result)
         return result
     }
 
