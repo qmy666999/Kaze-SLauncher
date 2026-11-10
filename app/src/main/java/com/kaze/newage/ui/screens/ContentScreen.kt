@@ -75,6 +75,7 @@ import com.kaze.newage.ui.AppViewModel
 import com.kaze.newage.ui.components.CheckChip
 import com.kaze.newage.ui.components.ExpressiveLoadingRing
 import com.kaze.newage.ui.components.FileImageIcon
+import com.kaze.newage.ui.components.VersionPickerDialog
 import com.kaze.newage.ui.components.M3ECard
 import com.kaze.newage.ui.components.M3ECardVariant
 import com.kaze.newage.ui.components.M3EConnectedList
@@ -132,6 +133,7 @@ fun ContentScreen(
     val worlds by controller.worlds.collectAsStateWithLifecycle()
     val bedrock by controller.bedrock.collectAsStateWithLifecycle()
     val sourceTests by controller.sourceTests.collectAsStateWithLifecycle()
+    val versionPicker by controller.versionPicker.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var tab by rememberSaveable { mutableStateOf(ContentTab.Mods) }
@@ -166,6 +168,18 @@ fun ContentScreen(
             ContentTab.Worlds -> instance?.let { controller.loadWorlds(it) }
             ContentTab.Bedrock -> controller.loadBedrock(instance)
         }
+    }
+
+    if (versionPicker.visible) {
+        VersionPickerDialog(
+            projectTitle = versionPicker.project?.title ?: "",
+            state = versionPicker,
+            onToggleAll = { controller.setPickerIncludeAll(it) },
+            onInstall = { version ->
+                instance?.let { controller.installPickedVersion(it, version) }
+            },
+            onDismiss = { controller.dismissVersionPicker() },
+        )
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
@@ -381,6 +395,21 @@ private fun BrowseSection(
             )
         }
     }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CheckChip(
+            selected = content.showAllVersions,
+            label = t("全部版本"),
+            onClick = { controller.setShowAllVersions(!content.showAllVersions) },
+        )
+        Text(
+            t("忽略加载器与 MC 版本过滤"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 
     // ── 安装进度 / 结果 ──
     if (content.installing) {
@@ -460,7 +489,7 @@ private fun BrowseSection(
                         .ifBlank { project.description },
                     shape = shape,
                     busy = content.installing,
-                    onInstall = { controller.install(instance, project) },
+                    onInstall = { controller.openVersionPicker(instance, project) },
                 )
             }
         } else if (!content.recommendedLoading && content.recommendedError == null) {

@@ -2,6 +2,7 @@ package com.kaze.newage.core.content
 
 import com.kaze.newage.core.addons.AddonKind
 import com.kaze.newage.core.addons.AddonManager
+import com.kaze.newage.core.addons.ModrinthVersion
 import com.kaze.newage.core.addons.ModrinthApi
 import com.kaze.newage.core.addons.ModrinthProject
 import com.kaze.newage.core.addons.ModrinthSearchResult
@@ -62,9 +63,13 @@ object ContentCatalog {
         sort: Sort = Sort.Relevance,
         offset: Int = 0,
         limit: Int = 20,
+        /** true = 不按实例的加载器/MC 版本过滤（"全部版本"开关） */
+        includeAllVersions: Boolean = false,
     ): ModrinthSearchResult {
-        val loaders = instance?.let { loadersFor(it, kind) }.orEmpty()
-        val gameVersion = instance?.mcVersion?.takeIf { it.isNotBlank() && !it.startsWith("bedrock", true) }
+        val loaders = if (includeAllVersions) emptyList()
+        else instance?.let { loadersFor(it, kind) }.orEmpty()
+        val gameVersion = if (includeAllVersions) null
+        else instance?.mcVersion?.takeIf { it.isNotBlank() && !it.startsWith("bedrock", true) }
         return ModrinthApi.searchContent(
             query = query,
             projectType = kind.modrinthType,
@@ -160,20 +165,45 @@ object ContentCatalog {
         instance: ServerInstance,
         kind: ContentKind,
         project: ModrinthProject,
+        /** 指定要装的版本（版本选择对话框）；null = 自动挑最新兼容版本 */
+        version: ModrinthVersion? = null,
         onProgress: (Float, String) -> Unit = { _, _ -> },
     ): Installed = withContext(Dispatchers.IO) {
         if (kind.isAddon) {
             val addonKind = if (kind == ContentKind.MOD) AddonKind.MOD else AddonKind.PLUGIN
-            val file = AddonManager.install(
-                instance = instance,
-                kind = addonKind,
-                projectId = project.id,
-                gameVersion = instance.mcVersion.takeIf { it.isNotBlank() },
-                onProgress = onProgress,
-            )
+            val file = if (version != null) {
+                AddonManager.installVersion(instance, addonKind, project.id, version, onProgress)
+            } else {
+                AddonManager.install(
+                    instance = instance,
+                    kind = addonKind,
+                    projectId = project.id,
+                    gameVersion = instance.mcVersion.takeIf { it.isNotBlank() },
+                    onProgress = onProgress,
+                )
+            }
             Installed(file)
+        } else if (version != null) {
+            installResourcePackVersion(instance, project, version, onProgress)
         } else {
             installResourcePack(instance, project, onProgress)
+        }
+    }
+
+    /**
+     * 资源包的可选版本：默认按实例 MC 版本过滤；`includeAll=true` 时不带版本过滤，
+     * 让用户能装"没有标这个 MC 版本"的包（很多包其实通用，只是没打标签）。
+     */
+    fun packVersions(
+        projectId: String,
+        gameVersion: String?,
+        includeAll: Boolean = false,
+    ): List<ModrinthVersion> {
+        val gv = gameVersion?.takeIf { it.isNotBlank() }
+        return if (includeAll || gv == null) {
+            ModrinthApi.versionsForPack(projectId, null)
+        } else {
+            ModrinthApi.versionsForPack(projectId, gv)
         }
     }
 
@@ -194,6 +224,16 @@ object ContentCatalog {
         }
         val version = versions.firstOrNull()
             ?: throw RuntimeException("「${project.title}」没有可下载的版本（可能已下架）")
+        return installResourcePackVersion(instance, project, version, onProgress)
+    }
+
+    /** 安装资源包的**指定版本**（版本选择对话框用） */
+    fun installResourcePackVersion(
+        instance: ServerInstance,
+        project: ModrinthProject,
+        version: ModrinthVersion,
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+    ): Installed {
         val file = version.files.firstOrNull { it.primary } ?: version.files.firstOrNull()
             ?: throw RuntimeException("「${project.title}」的版本里没有文件")
         val dir = File(instance.dir, ContentKind.RESOURCEPACK.dirName).apply { mkdirs() }

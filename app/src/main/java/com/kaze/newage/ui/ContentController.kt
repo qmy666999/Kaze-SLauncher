@@ -2,6 +2,9 @@ package com.kaze.newage.ui
 
 import android.content.Context
 import android.net.Uri
+import com.kaze.newage.core.addons.AddonKind
+import com.kaze.newage.core.addons.AddonManager
+import com.kaze.newage.core.addons.ModrinthVersion
 import com.kaze.newage.core.addons.ModrinthProject
 import com.kaze.newage.core.addons.ModrinthSearchHit
 import com.kaze.newage.core.bedrock.BedrockPack
@@ -55,6 +58,8 @@ class ContentController(
         /** 搜索结果当前页码（0 起） */
         val page: Int = 0,
         val hasMore: Boolean = false,
+        /** 搜索时是否忽略实例的加载器/MC 版本（"全部版本"） */
+        val showAllVersions: Boolean = false,
         val recommended: List<ModrinthProject> = emptyList(),
         val recommendedLoading: Boolean = false,
         val recommendedError: String? = null,
@@ -154,6 +159,7 @@ class ContentController(
                     sort = sort,
                     offset = page * PAGE_SIZE,
                     limit = PAGE_SIZE,
+                    includeAllVersions = _content.value.showAllVersions,
                 )
                 if (requestId == searchRequestId) {
                     _content.value = _content.value.copy(
@@ -191,8 +197,39 @@ class ContentController(
         search(lastInstance, state.query, state.sort, state.page - 1)
     }
 
-    fun installHit(instance: ServerInstance, hit: ModrinthSearchHit) {
-        install(
+    /** "全部版本"开关：忽略加载器/MC 版本过滤，从第 1 页重新搜 */
+    fun setShowAllVersions(showAll: Boolean) {
+        if (_content.value.showAllVersions == showAll) return
+        _content.value = _content.value.copy(showAllVersions = showAll)
+        val state = _content.value
+        search(lastInstance, state.query, state.sort, 0)
+    }
+
+    // ── 版本选择对话框 ──
+
+    data class VersionPickerState(
+        val visible: Boolean = false,
+        val loading: Boolean = false,
+        val project: ModrinthProject? = null,
+        val versions: List<ModrinthVersion> = emptyList(),
+        val includeAll: Boolean = false,
+        val error: String? = null,
+    )
+
+    private val _versionPicker = MutableStateFlow(VersionPickerState())
+    val versionPicker: StateFlow<VersionPickerState> = _versionPicker.asStateFlow()
+
+    private var pickerInstance: ServerInstance? = null
+
+    /** 打开"选择版本"：默认只列兼容当前实例的版本 */
+    fun openVersionPicker(instance: ServerInstance, project: ModrinthProject) {
+        pickerInstance = instance
+        _versionPicker.value = VersionPickerState(visible = true, loading = true, project = project)
+        loadPickerVersions(instance, project, includeAll = false)
+    }
+
+    fun openVersionPicker(instance: ServerInstance, hit: ModrinthSearchHit) {
+        openVersionPicker(
             instance,
             ModrinthProject(
                 id = hit.project_id,
@@ -206,12 +243,66 @@ class ContentController(
         )
     }
 
+    /** 切换"显示全部版本"（含其他 MC 版本） */
+    fun setPickerIncludeAll(includeAll: Boolean) {
+        val state = _versionPicker.value
+        val instance = pickerInstance ?: return
+        val project = state.project ?: return
+        if (state.includeAll == includeAll && state.versions.isNotEmpty()) return
+        _versionPicker.value = state.copy(includeAll = includeAll, loading = true, error = null)
+        loadPickerVersions(instance, project, includeAll)
+    }
+
+    private fun loadPickerVersions(instance: ServerInstance, project: ModrinthProject, includeAll: Boolean) {
+        val kind = _content.value.kind
+        scope.launch(Dispatchers.IO) {
+            try {
+                val versions = if (kind.isAddon) {
+                    val addonKind = if (kind == ContentKind.MOD) AddonKind.MOD else AddonKind.PLUGIN
+                    AddonManager.versionsForPicker(instance, addonKind, project.id, includeAll)
+                } else {
+                    ContentCatalog.packVersions(project.id, instance.mcVersion, includeAll)
+                }
+                _versionPicker.value = _versionPicker.value.copy(
+                    loading = false,
+                    versions = versions,
+                    includeAll = includeAll,
+                    error = null,
+                )
+            } catch (e: Exception) {
+                _versionPicker.value = _versionPicker.value.copy(
+                    loading = false,
+                    error = e.message ?: "版本列表加载失败",
+                )
+            }
+        }
+    }
+
+    fun dismissVersionPicker() {
+        _versionPicker.value = VersionPickerState()
+    }
+
+    /** 安装用户选中的版本 */
+    fun installPickedVersion(instance: ServerInstance, version: ModrinthVersion) {
+        val project = _versionPicker.value.project ?: return
+        dismissVersionPicker()
+        install(instance, project, version)
+    }
+
+    fun installHit(instance: ServerInstance, hit: ModrinthSearchHit) {
+        openVersionPicker(instance, hit)
+    }
+
     /**
      * 安装一个项目。模组/插件复用 AddonManager（同名替换会直接覆盖 —— 这里已经明确是
      * "装这个项目"，与搜索页的行为一致）；资源包装完记下 [ContentUiState.lastPack]，
      * 让界面可以提供"设为服务器资源包"。
      */
-    fun install(instance: ServerInstance, project: ModrinthProject) {
+    fun install(
+        instance: ServerInstance,
+        project: ModrinthProject,
+        version: ModrinthVersion? = null,
+    ) {
         if (_content.value.installing) return
         val kind = _content.value.kind
         _content.value = _content.value.copy(
@@ -224,7 +315,7 @@ class ContentController(
         )
         scope.launch(Dispatchers.IO) {
             try {
-                val installed = ContentCatalog.install(instance, kind, project) { p, m ->
+                val installed = ContentCatalog.install(instance, kind, project, version = version) { p, m ->
                     _content.value = _content.value.copy(
                         installProgress = p.coerceIn(0f, 1f),
                         installMessage = m,

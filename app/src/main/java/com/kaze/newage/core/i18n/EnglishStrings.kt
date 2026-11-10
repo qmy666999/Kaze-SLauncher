@@ -1328,5 +1328,14 @@ internal object EnglishStrings {
         "正在检测 frps…" to "Checking frps…",
         "frps 可达（%s ms）" to "frps reachable (%s ms)",
         "frps 不可达：%s" to "frps unreachable: %s",
+        "选择要安装的版本" to "Choose a version to install",
+        "显示全部 MC 版本" to "Show all MC versions",
+        "关闭时只显示兼容当前实例的版本" to "Off: only versions compatible with this instance",
+        "版本列表加载失败：%s" to "Failed to load versions: %s",
+        "没有可用版本；可以打开「显示全部 MC 版本」再试" to "No versions; try enabling “Show all MC versions”",
+        "未标注兼容版本" to "No version tags",
+        "MC %s" to "MC %s",
+        "全部版本" to "All versions",
+        "忽略加载器与 MC 版本过滤" to "Ignore loader and MC version filters",
     )
 }
