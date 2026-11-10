@@ -5,6 +5,21 @@
 
 ---
 
+## [0.13.2] - 2026-11-10
+
+### Added
+
+- **只显示服务端模组（默认开启）**
+  搜索接口没有 `server_side` facet，所以搜索后批量补一次 `/projects?ids=`，
+  按 `server_side = unsupported` 或 `client_side = required` 剔除**客户端专属**模组
+  （Sodium、Iris、ModMenu、JourneyMap…）。推荐表同样过滤，避免把纯客户端模组推荐给服务端。
+  筛选行新增「仅服务端模组」开关，关掉可查看全部（用于找双端通用模组时对照）。
+- **新增文档 `docs/资源管理PRD.md`**：页面结构、ViewModel/状态设计、数据类、
+  Modrinth/CurseForge 筛选参数、Compose 组件、客户端专属模组风险清单与里程碑。
+
+版本 0.13.1 → **0.13.2**（versionCode 44）。
+
+---
 ## [0.13.1] - 2026-11-10
 
 ### Changed

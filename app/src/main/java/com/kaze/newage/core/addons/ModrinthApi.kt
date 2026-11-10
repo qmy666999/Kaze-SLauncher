@@ -58,6 +58,17 @@ data class ModrinthProject(
     val body: String = "",
 ) {
     val webUrl: String get() = "https://modrinth.com/${project_type.ifBlank { "mod" }}/$slug"
+
+    /**
+     * 客户端专属：装到**服务端**会直接崩或毫无作用。
+     *
+     * 两条独立证据（任一成立即判定）：
+     *  - `server_side = unsupported`：作者明确不支持服务端；
+     *  - `client_side = required`：必须装在客户端才能工作（Sodium/Iris/ModMenu 之类）。
+     */
+    val clientOnly: Boolean
+        get() = server_side.equals("unsupported", ignoreCase = true) ||
+            client_side.equals("required", ignoreCase = true)
 }
 
 @Serializable

@@ -432,6 +432,13 @@ private fun BrowseSection(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (kind == ContentKind.MOD) {
+            CheckChip(
+                selected = content.serverOnly,
+                label = t("仅服务端模组"),
+                onClick = { controller.setServerOnly(!content.serverOnly) },
+            )
+        }
         CheckChip(
             selected = content.showFavoritesOnly,
             label = t("收藏（%s）", content.favorites.size),

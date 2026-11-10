@@ -1343,5 +1343,6 @@ internal object EnglishStrings {
         "详情加载失败：%s" to "Failed to load details: %s",
         "版本 · %s" to "Versions · %s",
         "选一个版本直接安装；不需要时可点「收起」" to "Pick a version to install; tap Collapse to hide",
+        "仅服务端模组" to "Server-side mods only",
     )
 }

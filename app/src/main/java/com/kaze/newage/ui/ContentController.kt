@@ -62,6 +62,8 @@ class ContentController(
         val hasMore: Boolean = false,
         /** 搜索时是否忽略实例的加载器/MC 版本（"全部版本"） */
         val showAllVersions: Boolean = false,
+        /** 只显示服务端可用的模组（过滤客户端专属） */
+        val serverOnly: Boolean = true,
         /** 收藏的项目 id */
         val favorites: Set<String> = emptySet(),
         /** 只看收藏（替代搜索结果区） */
@@ -116,7 +118,7 @@ class ContentController(
         scope.launch(Dispatchers.IO) {
             try {
                 if (force) ContentCatalog.clearRecommendCache()
-                val list = ContentCatalog.recommended(instance, kind)
+                val list = ContentCatalog.recommended(instance, kind, serverOnly = _content.value.serverOnly)
                 // 切分区时旧请求可能晚回来：只在"还是这个分区"时才写结果
                 if (_content.value.kind != kind) return@launch
                 _content.value = _content.value.copy(
@@ -169,6 +171,7 @@ class ContentController(
                     offset = page * PAGE_SIZE,
                     limit = PAGE_SIZE,
                     includeAllVersions = _content.value.showAllVersions,
+                    serverOnly = _content.value.serverOnly,
                 )
                 if (requestId == searchRequestId) {
                     _content.value = _content.value.copy(
@@ -204,6 +207,16 @@ class ContentController(
         val state = _content.value
         if (state.loading || state.page <= 0) return
         search(lastInstance, state.query, state.sort, state.page - 1)
+    }
+
+    /** 「仅服务端模组」开关：重新拉推荐与搜索（过滤客户端专属） */
+    fun setServerOnly(serverOnly: Boolean) {
+        if (_content.value.serverOnly == serverOnly) return
+        _content.value = _content.value.copy(serverOnly = serverOnly)
+        loadRecommended(lastInstance, _content.value.kind, force = true)
+        if (_content.value.searched) {
+            search(lastInstance, _content.value.query, _content.value.sort, 0)
+        }
     }
 
     /** "全部版本"开关：忽略加载器/MC 版本过滤，从第 1 页重新搜 */

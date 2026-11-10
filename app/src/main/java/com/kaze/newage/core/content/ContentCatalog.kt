@@ -69,6 +69,8 @@ object ContentCatalog {
         loaderOverride: String? = null,
         /** 手动指定的 MC 版本（筛选器）；null = 跟随实例 */
         gameVersionOverride: String? = null,
+        /** 只保留**服务端可用**的项目（模组默认开启，过滤客户端专属） */
+        serverOnly: Boolean = true,
     ): ModrinthSearchResult {
         val loaders = when {
             includeAllVersions -> emptyList()
@@ -80,7 +82,7 @@ object ContentCatalog {
             !gameVersionOverride.isNullOrBlank() -> gameVersionOverride
             else -> instance?.mcVersion?.takeIf { it.isNotBlank() && !it.startsWith("bedrock", true) }
         }
-        return ModrinthApi.searchContent(
+        val result = ModrinthApi.searchContent(
             query = query,
             projectType = kind.modrinthType,
             loaders = loaders,
@@ -89,6 +91,16 @@ object ContentCatalog {
             limit = limit,
             offset = offset,
         )
+        // 搜索接口没有 server_side facet：批量补一次项目详情，再剔掉客户端专属。
+        // 失败就不过滤（宁可能看到客户端模组，也不让搜索整页空掉）。
+        if (!serverOnly || !kind.isAddon || result.hits.isEmpty()) return result
+        val clientOnlyIds = runCatching {
+            ModrinthApi.projects(result.hits.map { it.project_id })
+                .filter { it.clientOnly }
+                .map { it.id }
+                .toSet()
+        }.getOrNull() ?: return result
+        return result.copy(hits = result.hits.filter { it.project_id !in clientOnlyIds })
     }
 
     /**
@@ -125,8 +137,12 @@ object ContentCatalog {
      * 再按实例的加载器与 MC 版本过滤一遍 —— 否则在 1.20.1 的 Forge 服上会推出一堆
      * 只支持 1.21 的 Fabric 模组，点安装必失败。
      */
-    fun recommended(instance: ServerInstance?, kind: ContentKind): List<ModrinthProject> {
-        val key = "${kind.name}|${instance?.coreType?.name.orEmpty()}|${instance?.mcVersion.orEmpty()}"
+    fun recommended(
+        instance: ServerInstance?,
+        kind: ContentKind,
+        serverOnly: Boolean = true,
+    ): List<ModrinthProject> {
+        val key = "${kind.name}|${instance?.coreType?.name.orEmpty()}|${instance?.mcVersion.orEmpty()}|$serverOnly"
         val now = System.currentTimeMillis()
         recommendedCache[key]?.takeIf { now - it.at < RECOMMENDED_TTL_MS }?.let { return it.items }
         val slugs = RecommendedProjects.slugs(kind)
@@ -138,10 +154,12 @@ object ContentCatalog {
                 runCatching { ModrinthApi.project(slug) }.getOrNull()
             }
         }
-        val filtered = all.filter { matches(it, instance, kind) }
+        // 推荐表里有 Sodium/Iris/ModMenu 这类客户端模组：给服务端推荐时必须剔掉
+        val serverSafe = if (serverOnly && kind.isAddon) all.filter { !it.clientOnly } else all
+        val filtered = serverSafe.filter { matches(it, instance, kind) }
         // 过滤后为空时**退回全量**：宁可显示"可能不兼容"的推荐，也不要让整页空着
         // （实例版本/加载器千奇百怪，严格的过滤反而会制造"资源中心没有内容"的错觉）。
-        val result = if (filtered.isEmpty()) all else filtered
+        val result = if (filtered.isEmpty()) serverSafe else filtered
         // 只缓存非空结果：一次网络失败若缓存了空列表，10 分钟内都会显示"没有可用条目"
         if (result.isNotEmpty()) recommendedCache[key] = Cached(now, result)
         return result
