@@ -5,6 +5,19 @@
 
 ---
 
+## [0.13.3] - 2026-11-11
+
+### Changed
+
+- **最低系统要求从 Android 8.1（API 27）降到 Android 7.0（API 24）**
+  - 目录列举从 `java.nio.file` 改为 `java.io.File`；
+  - 符号链接判断/创建改用 `android.system.Os.lstat` / `Os.symlink`（API 21）；
+  - `NotificationChannel` 增加 `SDK_INT >= O` 守卫（24/25 没有通知渠道）；
+  - 开启 **core library desugaring**，让 `java.time` 在 24/25 上可用。
+  版本 0.13.2 → **0.13.3**（versionCode 45）。
+
+---
+
 ## [0.13.2] - 2026-11-10
 
 ### Added

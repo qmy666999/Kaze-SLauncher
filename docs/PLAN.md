@@ -23,7 +23,7 @@
 |---|---|---|
 | 运行环境 | proot + Ubuntu 24.04 rootfs | 将 Linux 用户态环境封装在应用中，避免要求用户另装 Termux |
 | 技术栈 | Kotlin 2.1、Jetpack Compose、Gradle Wrapper | 使用 Android 原生 UI 与仓库锁定的构建工具链 |
-| 最低系统版本 | minSdk 27 | Android 8.1 及以上 |
+| 最低系统版本 | minSdk 24 | Android 7.0 及以上 |
 | 包名 | `com.kaze.newage` | 初始设计中希望与旧版共存 |
 | 许可证 | GPL-3.0 | 结合采用和改编的第三方组件及其许可证确定 |
 | 首发范围 | Vanilla、Paper、自定义 JAR | 当时的 MVP 范围；不是当前支持核心的完整清单 |

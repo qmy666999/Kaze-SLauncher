@@ -48,15 +48,16 @@ android {
 
     defaultConfig {
         applicationId = "com.kaze.newage"
-        minSdk = 27
+        // Android 7.0（API 24）：已去掉 java.nio.file 依赖，java.time 走脱糖
+        minSdk = 24
         // targetSdk 必须 ≤ 28：Android 按 targetSdk 选择 SELinux 域，≥30 的域（untrusted_app）
         // 由 AOSP 的 neverallow 明确禁止 execve 应用私有目录中的文件（W^X），
         // 而 proot 必须执行 rootfs 内的 guest 二进制（/usr/bin/dash 等），否则报
         // `execve("/usr/bin/sh"): Permission denied`、环境永远起不来（vivo Android 16 真机实锤）。
         // targetSdk 28 → untrusted_app_27 域，允许执行；Termux / PojavLauncher 同样停在 28。
         targetSdk = 28
-        versionCode = 44
-        versionName = "0.13.2"
+        versionCode = 45
+        versionName = "0.13.3"
     }
 
     // ABI flavor：每包只带本架构的 native 库与 rootfs 资产；universal 全量（分发用）
@@ -120,6 +121,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // java.time（AppLogStore / UpdateChecker 用）在 API 26 才有：
+        // 开脱糖后可以安全降到 minSdk 24。
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -159,6 +163,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

@@ -7,7 +7,7 @@
 [![CI](https://github.com/0Sakura721/Kaze-SLauncher/actions/workflows/ci.yml/badge.svg)](https://github.com/0Sakura721/Kaze-SLauncher/actions/workflows/ci.yml)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.1-blue?logo=kotlin)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-green)
-![minSdk](https://img.shields.io/badge/minSdk-27-orange)
+![minSdk](https://img.shields.io/badge/minSdk-24-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 请从 [GitHub Releases](https://github.com/0Sakura721/Kaze-SLauncher/releases) 获取安装包；版本变更见 [CHANGELOG.md](CHANGELOG.md)。
@@ -153,7 +153,7 @@ CI 会运行单元测试和界面截图测试；Release 流水线还会检查正
 
 `dist/` 目录里放了**已签名**的 arm64 安装包（随源码一起提交，方便没有构建环境的用户）：
 
-- `dist/Kaze-SLauncher-0.13.2-arm64-signed.apk`（versionCode 44 / versionName 0.13.2）
+- `dist/Kaze-SLauncher-0.13.3-arm64-signed.apk`（versionCode 45 / versionName 0.13.3）
 - `dist/SHA256SUMS.txt`：安装包校验值，下载后可自行核对
 - 签名证书 SHA-256：`674f95fb44d6b62f615b35061400ad21290f784bf4e565876bb2324506974128`
   （与旧版本一致，可覆盖升级；换签名会导致无法覆盖安装）
